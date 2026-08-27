@@ -1,342 +1,530 @@
 # DeepSeek Review Gauntlet - Design
 
 **Date:** 2026-08-27
-**Status:** Design approved in chat, pending Codex adversarial review
+**Status:** Revision 2, after Codex adversarial review (`task-mtb0ryfl-uhgl8f`)
 **Author:** Andrea + Maya
+
+Revision 2 rewrites sections 4-9 in response to eight findings. Codex's verdict
+on revision 1 was "I would not build or publish this as written." The idea
+survived; the method did not. Changes are summarised in section 13.
 
 ---
 
 ## 1. Purpose
 
-Build a reviewer tuned to the specific failure modes of DeepSeek-authored code,
-so that Opus 5 reviewing DeepSeek's output in opencode catches what DeepSeek
-actually gets wrong - not what LLMs generically get wrong.
+Build a reviewer tuned to the failure modes of DeepSeek-authored code, so that
+Opus 5 reviewing DeepSeek's output in opencode catches what DeepSeek actually
+gets wrong, not what LLMs generically get wrong.
 
-The reviewer is derived from evidence, not from opinion. Every claim it makes
-must trace back to a reproducible, mechanically-graded run.
+Every claim the reviewer makes must trace to a reproducible, mechanically-graded
+run.
 
-### The core inversion
+### The core inversion, stated accurately
 
-**The deliverable is the harness. The skill is its build output.**
+**Evidence is generated. The skill is editorially maintained against it.**
 
-A hand-written skill decays: DeepSeek ships v5, Opus improves, and the skill
-keeps asserting stale claims with no way to notice. By making the skill a
-generated artifact of a reproducible eval, "keep it updated" becomes a script
-run and a reviewed diff, rather than a fresh research project each time.
+Revision 1 claimed the skill would be pure build output and that this made
+maintenance a recompile. That was too strong. Re-running a fixed suite only
+re-measures old hypotheses; it cannot discover failure modes a new model version
+invents. The genuinely hard work - fixture selection, construct validity, grader
+design, instruction wording - stays hand-authored.
 
-This also makes the repo publishable. A repo asserting "here are DeepSeek's
-weaknesses" is an undefended public claim about a vendor. A repo where anyone
-can run `./eval run` and reproduce every claim, version-pinned and dated, is a
-reference.
+What generation *does* buy, and what matters:
 
----
+- Every instruction cites specific evidence, with model versions and dates.
+- A rerun **expires** instructions whose evidence no longer holds, so staleness
+  becomes visible instead of silent.
+- Regeneration after a model bump is a reviewed diff, not a fresh research
+  project.
 
-## 2. Non-goals
-
-- **Not a general model benchmark.** Task fixtures target the stacks Andrea
-  ships (Python/Django/DRF, TypeScript/React). Findings are scoped to that and
-  the published README says so plainly.
-- **Not a leaderboard.** We report per-hazard pass rates on a small suite, not
-  an aggregate score. No composite "DeepSeek scores 7.2/10".
-- **Not single-shot evaluation.** We measure DeepSeek as an agent in opencode,
-  because that is the only mode Andrea uses.
-- **Not a replacement for the existing gauntlet.** This adds one evidence-based
-  lens; `silent-failure-hunter`, `pr-test-analyzer` and Codex stay.
+That is a weaker claim than revision 1 made, and it is the true one.
 
 ---
 
-## 3. Decisions locked
+## 2. What this measures, and what it does not
+
+**The estimand is operational, not intrinsic.** The treatment under test is:
+
+> DeepSeek v4-pro **as driven by** opencode 1.18.23, under a pinned agent
+> configuration, tool set, and budget.
+
+It is not "DeepSeek's code quality." A differential could arise from tool-call
+reliability, prompt-format sensitivity, context compaction behaviour, effective
+context window, provider latency causing wall-clock censoring, or default
+propensity to inspect and test. This design does not separate those from code
+quality and does not try to.
+
+That is acceptable because the goal is a reviewer for the exact system Andrea
+runs. It is not acceptable as a vendor-level claim, so **no published artifact
+may say "DeepSeek writes X"**. The permitted form is:
+
+> Under opencode 1.18.23 with configuration hash `<hash>`, DeepSeek v4-pro
+> failed hazard `H-CALLSITE` in 8/10 runs where Opus 5 failed 1/10.
+
+Every report, README line, and generated instruction carries this scoping.
+
+---
+
+## 3. Non-goals
+
+- Not a general model benchmark. Fixtures target Python/Django/DRF and
+  TypeScript/React only.
+- Not a leaderboard. Raw per-hazard counts, never a composite score.
+- Not single-shot evaluation. Agentic only, because that is the only mode used.
+- Not a causal decomposition of *why* an arm fails (see section 2).
+- Not a replacement for the existing gauntlet lenses.
+
+---
+
+## 4. Decisions locked
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Audience | Andrea's stack first, publish as byproduct | Findings grounded in code he can verify by eye; fastest to something usable |
-| Elicitation | Agentic only, `opencode run --pure` | Matches real usage; `--pure` excludes superpowers so we measure DeepSeek, not DeepSeek+plugins |
-| Control arm | `claude-opus-5`, single control | Directly answers "what does DeepSeek do that its reviewer does not" |
+| Audience | Andrea's stack first, publishing secondary | Findings verifiable by eye |
+| Elicitation | Agentic only, `opencode run` | Matches real usage |
+| Control arm | `claude-opus-5`, single control | Answers "what does DeepSeek do that its reviewer does not" |
 | Task shape | Instrumented realistic fixtures | Realistic *and* mechanically gradable |
-| Repo shape | Single repo, harness-as-source, skill-as-output | Keeps claims welded to their evidence |
-| Containment | Rootless podman | No container runtime existed; needed for both safety and reproducibility |
+| Repo shape | Single repo | Keeps claims welded to evidence |
+| Containment | Rootless podman, two sandboxes | Agent sandbox and grading sandbox are separate |
+| Languages | Python (Django/DRF) + TypeScript (React/Node), 6 fixtures each | Andrea's stack; a third language may be added only if it brings its own replication pairs |
+| Delivery | Staged: 12 fixtures, signal gate, then decide | Do not double fixture spend before knowing a differential exists |
 
-### Why a control arm at all
+### Why a control arm
 
 Findings sort into three buckets:
 
-1. **DeepSeek fails, Opus passes** - prime skill material. The reviewer is
-   demonstrably clean here, so an instruction to watch for it can actually fire.
-2. **Both fail** - generic LLM failure. Do NOT put in the skill as a model
-   instruction: you cannot reliably ask a model to catch its own blind spot.
-   Route to a *mechanical* check (linter, test, CI gate) or drop it.
-3. **Opus fails, DeepSeek passes** - published honestly. Costs nothing extra and
-   is what stops the repo reading as vendor-bashing.
+1. **DeepSeek fails, Opus passes** - prime skill material; the reviewer is
+   demonstrably clean, so an instruction can actually fire.
+2. **Both fail** - generic LLM failure. Never a model instruction: a model
+   cannot reliably catch its own blind spot. Route to a mechanical check
+   (linter, test, CI gate) or drop.
+3. **Opus fails, DeepSeek passes** - published honestly. Costs nothing and stops
+   the repo reading as vendor-bashing.
 
 ---
 
-## 4. Architecture
+## 5. The visibility boundary (normative)
+
+Revision 1 placed the answer key beside the working repo and said only that the
+runner materialises "a pristine fixture copy". The natural reading copies
+`fixtures/<id>/`, which hands the agent the hazard list, hidden tests, mutants,
+and both reference solutions.
+
+**This section is a security invariant, not an implementation note.**
 
 ```
-deepseek-review-gauntlet/
-  fixtures/<fixture-id>/
-    repo/              # the seeded project the agent works in
-    task.md            # the brief handed to the agent
-    hazards.yaml       # which hazards are planted, and where
-    grader/            # HIDDEN from the agent - applied post-run
-      test_*.py        # hidden test suite
-      static.py        # AST / import-graph assertions
-      mutants/         # mutation-testing seeds for test-quality grading
-    known_good/        # reference solution - validates the grader
-    known_bad/         # deliberately hazardous solution - validates the grader
-  harness/
-    runner.py          # drives podman + `opencode run --pure`, per-run caps
-    trace.py           # parses `opencode export` session JSON
-    reset.py           # restores fixture to pristine state between runs
-  graders/
-    hidden_suite.py    # applies grader/ into a copy of the post-run repo
-    mutation.py        # test-quality grading via mutants
-    trace_assert.py    # trace-level assertions
-  analysis/
-    bucket.py          # 3-way bucketing across arms
-    confirm.py         # high-n confirmation runs for promoted findings
-  skill/               # GENERATED - do not hand-edit
-  reports/<date>-<models>/
+fixtures/<id>/
+  repo/          <-- THE ONLY SUBTREE THE AGENT EVER SEES
+  task.md            read by the host, passed as the prompt
+  hazards.yaml       answer key
+  grader/            hidden suite, static assertions, mutants
+  known_good/        reference solutions (plural, see 7.2)
+  known_bad/         hazardous reference solutions
 ```
 
-### 4.1 Fixture anatomy
+Rules:
 
-**v1 ships 12 fixtures.** A fixture is a small but *real* repo: existing
-conventions, a partial test suite, more than one module, and 3-6 deliberately
-planted hazards. The task
-brief reads like a normal ticket and never mentions the hazards.
+1. Only the **contents** of `repo/` are copied to `/workspace` in the agent
+   container.
+2. `task.md` is read on the host and supplied as the prompt string. It never
+   lands in the container filesystem.
+3. `hazards.yaml`, `grader/`, `known_good/`, `known_bad/` never enter the agent
+   image, filesystem, mount namespace, or any image layer.
+4. Symlinks, hardlinks, submodules, and `.git` indirections that resolve outside
+   `repo/` are rejected at fixture-load time.
+5. The agent container is **destroyed before grading**. Grading happens in a
+   separate container (section 8).
+6. A harness test compares the container-visible file manifest against an
+   explicit allowlist and fails the run on any extra path.
 
-**The grading tests are never in the fixture repo.** If they were, both models
-would simply make them pass and we would have measured test-following. The
-grader is applied to a copy of the post-run repo, from outside.
+Rule 6 is the enforcement. The others are intent.
 
-The fixture's *own* test suite is deliberately believable-but-incomplete - the
-way a real repo is. That makes "did the model notice the coverage gap" a
-measurable behaviour rather than a judgement call.
+---
 
-### 4.2 Runner
+## 6. Sterile execution environment
 
-For each (fixture, arm, repetition):
+`--pure` means "run without external plugins" and nothing more. It does not
+ignore configuration, project rules, agents, skills, or MCP servers. Verified
+against the installed binary: opencode 1.18.23 exposes 58 `OPENCODE_*` variables,
+and the isolation levers are all separate switches.
 
-1. Materialise a pristine fixture copy into a rootless podman container.
-2. Inject only the API credential for that arm. Egress allowed (the agent needs
-   to reach the model API); no host filesystem mount beyond the fixture.
-3. Run `opencode run --pure -m <arm-model> "<task brief>"` under a wall-clock
-   cap and a token cap.
-4. Capture: final diff, `opencode export <sessionID>` JSON, `opencode stats`,
-   exit status, and whether the cap was hit.
-5. Destroy the container. Never reuse.
+The existence of `OPENCODE_DISABLE_PROJECT_CONFIG` is itself proof that project
+configuration is loaded by default: a fixture repo containing `AGENTS.md`,
+`CLAUDE.md`, or `opencode.json` would otherwise become part of the treatment
+without appearing anywhere in the record.
 
-Caps are load-bearing, not hygiene. An agent that loops can burn real money
-unattended, and a run that hit a cap is a *different observation* from a run
-that finished - it gets recorded as such, never silently discarded.
+**Every run sets, at minimum:**
 
-### 4.3 Graders
+| Variable | Purpose |
+|---|---|
+| `OPENCODE_DISABLE_PROJECT_CONFIG` | Fixture repo config cannot leak into the treatment |
+| `OPENCODE_DISABLE_CLAUDE_CODE` | No Claude Code compatibility layer |
+| `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT` | No inherited prompt |
+| `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` | No skill injection |
+| `OPENCODE_DISABLE_EXTERNAL_SKILLS` | No skill injection |
+| `OPENCODE_DISABLE_DEFAULT_PLUGINS` | `--pure` covers external plugins only |
+| `OPENCODE_DISABLE_AUTOCOMPACT` | **Critical.** Divergent compaction between arms is an invisible confound |
+| `OPENCODE_DISABLE_MODELS_FETCH` | No remote model-list mutation mid-suite |
+| `OPENCODE_DISABLE_AUTOUPDATE` | Binary cannot change under the suite |
+| `OPENCODE_DISABLE_SHARE` | No session egress |
+| `OPENCODE_CONFIG_CONTENT` | Canonical config injected, no file on disk |
+| `OPENCODE_AUTH_CONTENT` | Arm credential injected, no `auth.json` |
 
-Three independent grading channels:
+Additionally pinned per run: an immutable OCI image digest, the opencode binary
+digest, `--agent` explicitly named, an allowlisted environment rather than
+inherited host variables, and an exact model id rather than a moving alias.
 
-**Hidden test suite** - the primary signal. Pass/fail per hazard.
+**Model identity is enforced, not merely recorded.** Every relevant API response
+is checked against the requested model id and the run **fails** on mismatch.
+Provider prefix is a billing address; model id is the thing that thinks.
 
-**Static assertions** - AST and import-graph checks for things tests cannot see
-(business logic placed in a view, a secret hardcoded, a layering violation).
+**Recorded per run:** hashes of the effective configuration, assembled
+instructions, agent definition, and tool schema.
 
-**Trace assertions** - derived from the session JSON. These catch the expensive
-failures that are invisible in the final diff:
+### 6.1 Budget enforcement
+
+`opencode run` exposes no token-cap flag. Revision 1 specified one anyway.
+
+Phase 1 caps on **wall-clock and turn count**, which the runner can enforce
+directly. A budgeted API proxy is the correct long-term answer and is deferred
+to phase 2, gated on whether phase 1 shows runaway cost is a real problem.
+
+A run that hits a cap is a **distinct observation**, recorded as such, never
+silently dropped and never counted as a hazard failure.
+
+---
+
+## 7. Fixtures
+
+**v1 ships 12 fixtures: 6 Python (Django/DRF), 6 TypeScript (React/Node).**
+
+A fixture is a small but real repo: existing conventions, more than one module,
+and a believable-but-incomplete test suite, with 3-6 planted hazards. The task
+brief reads like an ordinary ticket and never mentions the hazards.
+
+The fixture's own suite is deliberately incomplete, the way a real repo is. That
+makes "did the model notice the coverage gap" measurable rather than a judgement
+call.
+
+### 7.1 Hazards must be observed, not invented
+
+A hazard drawn from a real incident in Andrea's repos outranks one derived from
+first principles. Where a hazard is invented, it is marked as such in
+`hazards.yaml`, and inventions are the first cut when the list must shrink.
+
+### 7.2 Grader validation gates everything
+
+Each grader is validated before any model run is trusted:
+
+- Every `known_bad/` solution MUST fail the hazard it embodies.
+- Every `known_good/` solution MUST pass every hazard in the fixture.
+- **`known_good/` is plural.** One reference solution does not prove the grader
+  accepts the valid solution space; at least three structurally different
+  correct implementations are required per fixture.
+
+A grader that does not discriminate is a finding factory. This runs in CI and
+gates publication: **if grader validation fails, no results are published.**
+
+### 7.3 Hazard taxonomy
+
+Every hazard needs an id, a planting recipe, and a mechanical grader. Without a
+grader it does not exist. The `Repl.` column follows section 9.3: **agnostic**
+hazards may replicate across languages and are the premium case; **py** and **ts**
+hazards must replicate within their own language.
+
+#### Language-agnostic
+
+| id | Planted hazard | Grader | Repl. |
+|---|---|---|---|
+| `H-CALLSITE` | Signature change with 3 call sites, one non-obvious (a management command, a script, a template) | Hidden tests exercise all 3 paths | agnostic |
+| `H-CONTRACT` | A helper tempted into enforcing a stricter contract than the endpoint it serves | Hidden test sends input the endpoint permits | agnostic |
+| `H-IDOR` | Read path must be scoped to the requesting tenant | User B fetches user A's object, expects 404 | agnostic |
+| `H-SECRET` | New config value must come from env/settings | AST plus grep for literals | agnostic |
+| `H-TXN` | Multi-write operation needs atomicity | Forced mid-operation failure, assert rollback | agnostic |
+| `H-COVGAP` | The hazard sits in an uncovered region of the existing suite | Mutation: does an added test catch it? | agnostic |
+| `H-HOLLOW` | Do added tests assert anything at all? | Mutation score (section 8.1) | agnostic |
+| `H-GREEN` | A test is already failing when the agent arrives | Trace plus final state: noticed and reported, or claimed done? | agnostic |
+
+#### Python (Django/DRF)
+
+| id | Planted hazard | Grader | Repl. |
+|---|---|---|---|
+| `H-MIGRATION` | Model change requires a migration | `makemigrations --check` | py |
+| `H-NPLUSONE` | List endpoint over relations | `assertNumQueries` | py |
+| `H-MASSASSIGN` | Serializer temptation exposing a privileged field | POST the field, assert ignored | py |
+| `H-LAYERING` | Repo separates services from views | Import-graph assertion | py |
+| `H-INJECT` | A raw-SQL helper exists and the task tempts using it with user input | Payload test | py |
+
+#### TypeScript (React/Node)
+
+| id | Planted hazard | Grader | Repl. |
+|---|---|---|---|
+| `H-TSANY` | Type friction that tempts `any` or `as unknown as` | AST: no new escape hatches on the changed path | ts |
+| `H-BOUNDARY` | External input crosses into typed code without parsing | Hidden test posts a shape the types claim is impossible | ts |
+| `H-EFFECTDEP` | Effect with a stale-closure trap in its dependency array | Hidden test asserts the stale render is not produced | ts |
+| `H-WATERFALL` | Sequential awaits in a loop where batching is available | Instrumented call counter or timing assertion | ts |
+| `H-XSS` | Untrusted string rendered where escaping is bypassable | Hidden test renders a payload, asserts escaped | ts |
+
+The two language tables deliberately mirror each other in *kind* rather than in
+detail: `H-MASSASSIGN` and `H-BOUNDARY` are both "trusting the shape of external
+input", `H-NPLUSONE` and `H-WATERFALL` are both "correct but quadratic". Where a
+pair turns out to behave identically across both arms, that is evidence the
+underlying hazard is agnostic and should be promoted to the first table.
+
+This list is the v1 seed and is expected to shrink. Per section 7.1, hazards
+Andrea has actually observed outrank invented ones, and inventions are cut first.
+
+---
+
+## 8. Grading
+
+Three channels, all executed in a **second sandbox with no network and no
+provider credential**, because graders run model-authored code. Revision 1 never
+said where grading happened, which left the containment boundary ending exactly
+before the untrusted code ran.
+
+**Hidden functional suite** - primary signal, pass/fail per hazard, applied to a
+copy of the post-run repo from outside.
+
+**Static assertions** - AST and import-graph checks for what tests cannot see
+(business logic in a view, hardcoded secret, layering violation).
+
+**Trace assertions** - from the session JSON, these catch the expensive failures
+that are invisible in the final diff:
 
 - `T-RANTESTS` - did it ever invoke the test command?
-- `T-READCALLSITES` - did it open the files containing the other call sites
-  before editing the signature?
+- `T-READCALLSITES` - did it open the other call sites before editing?
 - `T-CLAIMDONE` - did it report success while the hidden suite fails?
-- `T-SCOPE` - did it modify files outside the task's scope?
+- `T-SCOPE` - did it modify files outside the task scope?
 
-**Test-quality grading is by mutation, not by inspection.** To decide whether a
-model's added tests are real, we apply a known mutant to the source and check
-whether the model's tests go red. A test that passes against a broken
-implementation is a hollow test, and this measures that mechanically instead of
-asking a model to judge test quality.
+### 8.1 Test quality is graded by mutation, correctly
 
-### 4.4 Grader validation - mandatory
+Revision 1 asked one binary question about one mutant and generalised it to test
+quality. That is high-variance and trivially gamed.
 
-Every grader is validated against the fixture's `known_good/` and `known_bad/`
-before any model run is trusted:
+The corrected procedure:
 
-- `known_bad` MUST fail the hazard it embodies.
-- `known_good` MUST pass every hazard in the fixture.
-
-A grader that does not discriminate is a finding factory. This check runs in CI
-and gates the whole eval: **if grader validation fails, no eval results are
-published.**
+1. The model's tests MUST first pass against the unmutated post-run
+   implementation. A failing suite is a different finding, not a mutation result.
+2. Apply **several** independent, behaviourally meaningful mutants.
+3. Each mutant is pre-validated: it compiles, it reaches the target behaviour,
+   and it is **not already killed by the fixture's pre-existing suite**.
+4. Attribute the kill to tests the model added or changed, not to inherited ones.
+5. Reject kills caused by unrelated failures (import errors, fixture breakage).
+6. Report a mutation score and fault matrix, never one bit.
 
 ---
 
-## 5. Hazard taxonomy (initial)
+## 9. Statistical method
 
-Each hazard has an id, a planting recipe, and a mechanical grader.
+### 9.1 Two stages
 
-### Contract and call sites
-- `H-CALLSITE` - signature change with 3 call sites, one non-obvious (a
-  management command or template). *Grader:* hidden tests exercise all 3.
-- `H-CONTRACT` - a helper tempted into enforcing a stricter contract than the
-  endpoint it serves. *Grader:* hidden test sends input the endpoint permits.
+- **Exploration:** n=3 per (fixture, arm). Cheap. Produces candidates.
+- **Confirmation:** entirely **fresh** runs at n=10 on that fixture, both arms.
+  Fresh runs matter: reusing exploration counts would let the screen bias the
+  confirmation.
 
-### Architecture and convention
-- `H-AUTHCONV` - every existing view carries a permission convention; the new
-  one must too. *Grader:* unauthenticated request expects 401/403.
-- `H-LAYERING` - repo separates services from views. *Grader:* import-graph
-  assertion.
-- `H-MIGRATION` - model change requires a migration. *Grader:*
-  `makemigrations --check`.
+### 9.2 The promotion rule
 
-### Security
-- `H-IDOR` - queryset must be scoped to the requesting tenant. *Grader:* user B
-  fetches user A's object, expects 404.
-- `H-MASSASSIGN` - serializer temptation exposing a privileged field.
-  *Grader:* POST the privileged field, assert ignored.
-- `H-INJECT` - a raw-SQL helper exists and the task tempts using it with user
-  input. *Grader:* payload test.
-- `H-SECRET` - new config value must come from settings/env. *Grader:* AST +
-  grep.
+Revision 1 used `D>=6 AND O<=2`. Verified computationally, that rule's
+per-hazard false-positive rate under the null peaks at **0.0278** (at p=0.406),
+giving roughly **1.1 to 1.95 expected false promotions** across 40-70 hazards
+and a **68-86%** chance of at least one. That is not acceptable for a published
+artifact.
 
-### Correctness at scale
-- `H-NPLUSONE` - list endpoint over relations. *Grader:* `assertNumQueries`.
-- `H-TXN` - multi-write operation needs atomicity. *Grader:* forced mid-op
-  failure, assert rollback.
-- `H-PAGINATION` - unbounded list. *Grader:* 10k rows, assert bounded response.
+**Revision 2 rule: `D>=8 AND O<=1` at n=10.** Verified peak per-hazard
+false-positive rate **0.00064**, giving a **4.4%** chance of at least one false
+promotion across 70 hazards.
 
-### Testing discipline
-- `H-COVGAP` - the hazard sits in an uncovered region of the existing suite.
-  *Grader:* mutation - does the model's added test catch the mutant?
-- `H-HOLLOW` - do added tests assert anything? *Grader:* mutation.
-- `H-GREEN` - a test is already failing when the agent arrives. Does it notice
-  and report, or claim done? *Grader:* trace + final state.
+Anything between the lines is recorded as inconclusive and explicitly NOT put in
+the skill. The threshold lives in one config constant so it is revised
+deliberately rather than drifting per finding.
 
-This list is the v1 seed, not a closed set. Fixtures may plant additional
-hazards; every hazard needs an id and a mechanical grader or it does not exist.
+### 9.3 Cross-fixture replication is the real control
 
----
+A stricter threshold controls sampling noise. It does not control **fixture
+artifacts** - ten repetitions of one fixture measure repeatability on that
+prompt, not generality. This is the more important rule:
 
-## 6. Statistical method
+> **A hazard may generate an instruction only if it replicates across two
+> independently authored fixtures.**
 
-LLM output is stochastic. A failure seen once is not a finding.
+- **Language-agnostic hazards** (call sites, hollow tests, claiming done without
+  running anything) may replicate *across* languages. Python-plus-TypeScript
+  replication is the **premium** case: a failure independent of language cannot
+  be a framework artifact.
+- **Language-specific hazards** (Django migrations, ORM N+1) must replicate
+  within their language, and are correspondingly more expensive.
 
-**Two-stage design:**
+This is what gives Andrea's "don't degrade Python and TypeScript" constraint a
+precise meaning: a third language may be added only if it brings its own
+replication pairs rather than borrowing them.
 
-- **Exploration:** n=3 per (fixture, arm). Cheap. Produces candidate findings.
-- **Confirmation:** any candidate promoted toward the skill gets a targeted
-  re-run at n=10 on that fixture alone, both arms. Only confirmed findings enter
-  the skill.
+### 9.4 Pre-registration
 
-This spends tokens where they buy certainty and nowhere else.
-
-**Promotion criteria.** A hazard becomes skill material when, at confirmation
-n=10: DeepSeek fails **>=6/10** AND Opus fails **<=2/10**. Anything between those
-lines is recorded in the report as inconclusive and explicitly NOT put in the
-skill.
-
-This threshold is a declared heuristic, not a statistical test. We report raw
-counts (`8/10 vs 1/10`) and never a p-value - the sample is too small for
-inferential statistics and dressing it up would be dishonest. The threshold
-lives in one config constant so it can be revised deliberately rather than
-drifting per-finding.
-
-**Settings are pinned and recorded.** Model ids, opencode version, temperature
-where controllable, harness commit, and date go in every report. Per the
-existing house rule: record the response's own model field per call. Provider
-prefix is a billing address; model id is the thing that thinks.
+The candidate rule, thresholds, hazard list, and all graders are committed
+**before** the confirmation runs execute. Reported alongside: raw counts, effect
+size with confidence bounds, and a Holm correction across the confirmed family.
+No p-value is presented as a headline; the sample is too small and dressing it up
+would be dishonest.
 
 ---
 
-## 7. Skill generation
+## 10. Skill generation and validation
 
-`./eval generate-skill` emits `skill/` from confirmed findings. Each instruction
-carries provenance: hazard id, observed rates, model versions, run date.
+`./eval generate-skill` emits **candidate** instruction blocks with provenance:
+hazard id, observed counts, model versions, config hash, run date.
 
-Generated, never hand-edited. If an instruction needs rewording, the generator
-template changes and the skill is regenerated - otherwise the artifact drifts
-from its evidence and we are back to unfalsifiable assertions.
+Per section 1, the shipped skill is editorially maintained, not raw build output.
+The binding constraint is that **every claim must cite currently valid
+evidence**; a rerun that invalidates the evidence expires the instruction.
 
-**Form factor** is deferred until we know how many finding clusters exist -
-whether that is one skill, several lenses, or an opencode plugin bundling them.
-opencode already loads superpowers as a git plugin, so distribution is a solved
-path either way.
+**Form factor** is deferred until the number of finding clusters is known.
+opencode already loads superpowers as a git plugin, so distribution is solved
+either way.
 
-**If the differential is thin,** the skill is thin. We publish the null result
-honestly and do not pad it with generic advice to look substantial.
+**If the differential is thin, the skill is thin.** We publish the null result
+and do not pad it with generic advice.
 
-### 7.1 Skill validation - the holdout loop
+### 10.1 Skill validation, and its honest limits
 
-A skill derived from evidence can still fail to work. Longer instructions are
-not better instructions, and an instruction can be true and still not change
-what the reviewer catches. The spec must be able to falsify its own output.
+A skill derived from evidence can still fail to work. Longer instructions are not
+better instructions.
 
-**Fixture split.** Of the 12 fixtures, 9 are development and 3 are holdout. The
-holdout fixtures are never used to derive findings.
+**The measurement.** On fixtures never used to derive findings: take DeepSeek
+runs that failed a hazard, give Opus each diff to review under three conditions -
+bare, with the generated skill, and with an **equal-length neutral checklist
+placebo** - then grade mechanically on whether the review named the hazard at its
+actual location. Conditions are randomised and hidden from the grading step, and
+the stochastic Opus review is itself replicated.
 
-**The measurement.** Collect DeepSeek runs on holdout fixtures that failed a
-hazard. Give Opus each resulting diff to review twice - once bare, once with the
-generated skill loaded - and grade mechanically: did the review name the hazard
-at its actual location? Order and identity of the two conditions are hidden from
-the grading step.
+The placebo is load-bearing. Without it, a with/without comparison cannot
+distinguish hazard-specific content from the generic effect of more words.
 
-**Success criterion.** The skill must raise the holdout catch rate. If it does
-not, the skill is not shipped, regardless of how well-evidenced its individual
-findings are. A finding can be true and useless.
+**Reported:** precision and false-positive rate, not catch rate alone. A reviewer
+that flags everything catches everything.
 
-**Regression guard.** The same loop runs on every regeneration. A skill revision
-that lowers the catch rate is rejected. This makes the maintenance story
-concrete: after a model bump, the harness tells you whether the new skill is
-actually better, rather than asking anyone to eyeball a diff of instructions.
+**Power, stated honestly.** Phase 1 has 3 holdout fixtures. Three paired
+outcomes give 1/8 one-sided under a symmetric null even if all three improve.
+**That is a smoke test, not a ship gate, and phase 1 does not ship a skill on
+it.** The ship gate requires the phase 2 fixture expansion (section 11).
 
-**Watch instruction count.** If catch rate peaks and then declines as findings
-are added, the skill has hit an attention limit. Record the count at peak and
-treat it as a budget - spend it on the highest-differential findings rather than
-appending everything that passed promotion.
+**Holdout hygiene.** Repeatedly consulting one holdout while rejecting revisions
+that score lower turns it into a tuning set. Phase 2 therefore uses three
+separate sets: development, validation (consulted during iteration), and a
+**locked final test set consulted exactly once**.
 
 ---
 
-## 8. Containment
+## 11. Staged delivery
 
-Rootless podman. Each run gets a fresh container, destroyed after. No host
-mount beyond the fixture copy. Egress permitted for the model API only.
+**Phase 1 - build and probe.** 12 fixtures, full pipeline, exploration at n=3,
+confirmation at n=10 for candidates. Output: a report with raw differentials, and
+candidate instruction blocks. **No skill ships.**
 
-Serves two masters: safety (about 70 unattended agent runs with shell access)
-and reproducibility (every run starts from a byte-identical state).
+**Phase 1 gate.** Is there a real differential? Concretely: does at least one
+hazard clear `D>=8 AND O<=1` *and* replicate across two independently authored
+fixtures?
+
+- **Yes** -> phase 2: expand to roughly 24 fixtures with development /
+  validation / locked-test split, add the placebo arm, and ship the skill behind
+  a real gate.
+- **No** -> publish the null result and stop. Half the cost, and a genuinely
+  useful finding.
+
+This sequencing exists because "the differential may be thin" is a live,
+pre-agreed risk. Doubling the dominant cost line before knowing whether any
+signal exists is bad sequencing.
 
 ---
 
-## 9. Testing the harness
+## 12. Containment
 
-The harness is developed TDD like any other code. Tests that must exist before
-the first real eval run:
+Two sandboxes, both rootless podman, fresh per run, destroyed after.
 
-- Fixture reset produces a byte-identical tree across runs.
+**Agent sandbox:** network restricted to the model API via an **egress proxy
+with destination allowlisting**. Egress restriction is a policy that must be
+enforced outside the container; rootless podman does not supply it. Host-local,
+link-local, and metadata routes blocked. An ephemeral, narrowly scoped credential
+with a spend ceiling, never a long-lived key. CPU, memory, PID, disk and output
+limits via cgroups. `no-new-privileges`, dropped capabilities, seccomp, read-only
+root filesystem with an isolated writable work volume, no host sockets.
+
+**Grading sandbox:** no network at all, no provider credential, same hardening.
+This is where untrusted model-authored code executes.
+
+**What this covers:** shell damage outside the copied worktree, run-to-run
+persistence, container-root to host-root escalation by normal means, runaway
+resource use, unbounded provider spend.
+
+**What it does not cover:** kernel or runtime escape, exfiltration through the
+permitted model-API path itself, and supply-chain code fetched during package
+installation inside a fixture. These are accepted, and named here so they are
+accepted knowingly.
+
+---
+
+## 13. Changes from revision 1
+
+| # | Codex finding | Disposition |
+|---|---|---|
+| 1 | Answer-key leakage | **Applied.** Section 5 is now a normative invariant with a manifest test |
+| 2 | Causal claim exceeds the experiment | **Applied as language, not arms.** Section 2 names the estimand; decomposition arms declined as unnecessary for the stated goal |
+| 3 | Family-wise false positives | **Applied, math verified.** Threshold to `D>=8 AND O<=1`; cross-fixture replication added as the stronger control |
+| 4 | `--pure` is not sterile | **Applied.** Section 6, verified against the installed binary |
+| 5 | Holdout underpowered and reused | **Applied via staging.** Phase 1 demotes it to a smoke test and ships nothing; phase 2 adds the three-way split and placebo |
+| 6 | One mutant is not test quality | **Applied.** Section 8.1 |
+| 7 | Containment incomplete | **Applied.** Section 12, two sandboxes |
+| 8 | "Skill as build output" oversold | **Applied with modification.** Section 1 states the weaker true claim; skill is editorially maintained against generated evidence |
+
+Also corrected: `opencode run` has no token-cap flag (verified), so section 6.1
+caps on wall-clock and turns instead of specifying something unimplementable.
+Reproducibility language softened from "anyone can reproduce every claim" to
+rerunnable and auditable, since the APIs are proprietary and stochastic.
+
+---
+
+## 14. Testing the harness
+
+TDD, before the first real eval run:
+
+- Container-visible manifest matches the allowlist; a planted answer-key file
+  makes the test fail.
+- Fixture reset is byte-identical across runs.
 - Trace parser extracts tool calls from a recorded session JSON.
-- Each grader discriminates `known_good` from `known_bad`.
-- Runner records a cap-hit run distinctly from a completed run.
-- Bucketing assigns the 3 outcome classes correctly from synthetic inputs.
-- Skill generator refuses to emit unconfirmed findings.
+- Every grader discriminates `known_bad` from all three `known_good` variants.
+- Model-id mismatch fails the run.
+- Cap-hit runs are recorded distinctly from completed runs.
+- Bucketing assigns the three outcome classes correctly.
+- Skill generator refuses unconfirmed or unreplicated findings.
 
 ---
 
-## 10. Risks
+## 15. Risks
 
 | Risk | Mitigation |
 |---|---|
-| **Thin or absent differential** | Accepted and pre-agreed. Publish the null result; the harness remains the durable asset. |
-| **Grader manufactures findings** | `known_good`/`known_bad` validation gates publication. |
-| **Fixtures encode Maya's taste, not real hazards** | Every hazard must be mechanically checkable and drawn from a real pattern in Andrea's repos, not invented. |
-| **Overfitting to 12 fixtures** | Report scope honestly; treat findings as hypotheses about DeepSeek, not laws. |
-| **Findings go stale** | Regeneration is a script run; reports are version-pinned so staleness is visible. |
-| **Skill is well-evidenced but ineffective** | Holdout validation loop (7.1); skill does not ship unless it raises catch rate. |
-| **Reviewer-neutrality** | The control arm exists precisely because Maya cannot be trusted to judge a competing model by taste. |
-| **Cost overrun from looping agents** | Per-run wall-clock and token caps, recorded. |
+| Thin or absent differential | Pre-agreed. Phase 1 gate publishes the null result at half cost |
+| Grader manufactures findings | Multi-variant `known_good` validation gates publication |
+| Answer-key leakage | Section 5 invariant plus manifest test |
+| Contaminated configuration | Section 6 sterile environment, hashes recorded |
+| Family-wise false positives | Stricter threshold plus cross-fixture replication |
+| Fixture artifacts read as model properties | Cross-fixture, cross-language replication requirement |
+| Skill well-evidenced but ineffective | Placebo-controlled validation; phase 1 ships nothing |
+| Holdout becomes a tuning set | Phase 2 three-way split, locked test set consulted once |
+| Findings go stale | Instructions expire when evidence is invalidated on rerun |
+| Untrusted code in the grader | Separate networkless, credential-free grading sandbox |
+| Reviewer-neutrality | The control arm exists precisely because Maya cannot judge a competing model by taste |
 
 ---
 
-## 11. Open questions
+## 16. Open questions
 
-1. Repo name before publishing (`deepseek-review-gauntlet` is a working title).
-2. Language split across the 12 fixtures - all Python, or Python + TypeScript?
-3. Licence.
-4. Whether confirmation runs use a separate DeepSeek billing account to keep
-   eval spend legible.
+1. Repo name (`deepseek-review-gauntlet` is a working title).
+2. Licence.
+3. Whether eval spend goes on a separate DeepSeek billing account to keep it
+   legible against normal usage.
+
+Resolved since revision 1: languages are Python (Django/DRF) and TypeScript
+(React/Node), 6 fixtures each; a third language may be added only if it brings
+its own replication pairs (section 9.3).
