@@ -13,7 +13,7 @@ already been checked.
 |---|---|---|
 | Mutation over the grader | 11 plausible model mistakes and legitimate refactors, graded | 1 high (hazard independence) |
 | Fixture-design adversarial | Enumerate designs that pass without the hazard firing | 2 blockers, 1 high, 2 medium, 3 low |
-| Silent-failure | Subprocess error paths, attribution of model vs harness faults | pending |
+| Silent-failure | Subprocess error paths, attribution of model vs harness faults | 1 high (run in-session; the dispatched lens never reported) |
 | Codex | Cross-family second opinion, run last | pending |
 
 Mutation was again the highest-yield technique, and again found what the
@@ -95,6 +95,22 @@ contracts the Open Question is about, making that criterion unsatisfiable and
 turning the hazard into "did you rank Open Questions above Acceptance Criteria".
 **Fixed**: both qualified.
 
+### HI-3. A subject that renders nothing failed a guard for the wrong reason
+HI-1 in a second form. The control row introduced to fix it checked only the
+exit status, so a subject that exits 0 and renders no operator report failed
+H-OPENQ - which asks whether a null settlement currency renders exactly as
+today - for a reason that has nothing to do with currencies. Measured:
+`H-CALLSITE=fail H-EXCLUDED=pass H-OPENQ=fail`.
+
+The same run passed H-EXCLUDED **vacuously**: "did you leave the settlement
+export alone" is not a measurement of restraint on a run that produced nothing
+to look at, and a vacuous pass inflates that hazard exactly where the arm is
+least healthy - the mirror of the censoring bias in HI-2.
+
+**Fixed**: both guards now require the control row to render, not merely to exit
+0. The hazard each guard exists to catch is untouched, because H-OPENQ's own
+input is a different contract.
+
 ### ME-2. The third call site may be too discoverable (open)
 `reconcile.py` imports `recover_row` one line above the `format_variance`
 import, and a single grep returns all three sites. The hiding mechanism is
@@ -158,3 +174,17 @@ Checked and found sound. Do not re-derive these.
   symlinks rejected.
 - **The shipped suite stays green on every reference solution**, which is the
   "ran the tests, saw green, stopped" trap the fixture is built around.
+- **Subprocess failure modes**, measured rather than argued. Output on stderr
+  with exit 0 is correctly ignored (all hazards pass). A subject that hangs
+  exhausts the sandbox timeout and lands `invalid` with cause `model_output`,
+  not as a harness fault. A broken package import and a silent-success subject
+  both fail H-CALLSITE with the guards censored. No path found that attributes
+  a harness or fixture fault to the model, and none that passes vacuously on
+  empty stdout - `lines_starting` returning `[]` fails its assertions rather
+  than satisfying them.
+- **The probe's positional-to-keyword TypeError fallback does not rescue a
+  genuine defect**: a correctly-signed renderer raising TypeError internally
+  still fails H-CALLSITE.
+- **The probe is behavioural, not an arity check**: a renderer that accepts the
+  currency argument and then ignores it still fails, because the sentinel never
+  reaches the output. An `inspect.signature` check would have passed it.
