@@ -183,3 +183,38 @@ def test_an_extra_file_visible_in_the_container_is_a_violation(tmp_path):
     (staged / "ANSWERS.md").write_text("the timezone goes in three call sites\n")
     with pytest.raises(FixtureViolation, match="container manifest"):
         assert_container_manifest(fixture, "localhost/odr-agent:latest", staged)
+
+
+def _with_reference(tmp_path, declared, variants=("explicit_all", "keyword_only")):
+    """A fixture carrying several known-good trees, like a real one does."""
+    fx = _make_fixture(tmp_path)
+    for name in variants:
+        (fx / "known_good" / name).mkdir(parents=True)
+    hazards = (fx / "hazards.yaml").read_text()
+    if declared is not None:
+        hazards = f"reference: {declared}\n" + hazards
+    (fx / "hazards.yaml").write_text(hazards)
+    return fx
+
+
+def test_the_reference_tree_is_declared_not_guessed(tmp_path):
+    """known_good_dir hardcoded `explicit_all` - fixture #1's variant name baked
+    into fixture-generic code, the same bug class as eval.py's hardcoded
+    `notifications/services.py`. Its one caller (validate_hazard_mapping) needs
+    a tree where every grader test collects, not a particular name."""
+    fixture = load_fixture(_with_reference(tmp_path, "keyword_only"))
+    assert fixture.known_good_dir.name == "keyword_only"
+
+
+def test_an_undeclared_reference_tree_is_a_violation(tmp_path):
+    """Silently guessing a name points the grader-collection stage at a tree
+    that may not exist, which surfaces as a confusing copytree error."""
+    fixture = load_fixture(_with_reference(tmp_path, None))
+    with pytest.raises(FixtureViolation, match="reference"):
+        fixture.known_good_dir
+
+
+def test_a_reference_tree_that_does_not_exist_is_a_violation(tmp_path):
+    fixture = load_fixture(_with_reference(tmp_path, "no_such_variant"))
+    with pytest.raises(FixtureViolation, match="no_such_variant"):
+        fixture.known_good_dir
