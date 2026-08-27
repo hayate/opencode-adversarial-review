@@ -15,6 +15,20 @@ from pathlib import Path
 
 CHUNK = 1024 * 1024
 
+# Build artefacts a test run creates. These are not model decisions: on the
+# first real run they produced 20 entries in out_of_scope_paths and buried the
+# single real change. Excluded from the snapshot entirely so that scope
+# analysis measures intent rather than the side effects of running pytest.
+IGNORED_NAMES = {"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+IGNORED_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _is_detritus(rel: str) -> bool:
+    parts = rel.split("/")
+    if any(part in IGNORED_NAMES for part in parts):
+        return True
+    return any(rel.endswith(suffix) for suffix in IGNORED_SUFFIXES)
+
 
 @dataclass(frozen=True)
 class Changes:
@@ -54,6 +68,8 @@ def snapshot(tree: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for path in sorted(tree.rglob("*")):
         rel = path.relative_to(tree).as_posix()
+        if _is_detritus(rel):
+            continue
         info = path.lstat()
         mode = stat.S_IMODE(info.st_mode)
         if path.is_symlink():

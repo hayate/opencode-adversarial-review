@@ -86,3 +86,17 @@ def test_out_of_scope_paths_are_derived_from_real_changes(tmp_path):
     changes = diff_snapshots(before, snapshot(tmp_path))
     assert changes.touched() == {"allowed.py", "forbidden.py"}
     assert changes.outside({"allowed.py"}) == {"forbidden.py"}
+
+
+def test_build_detritus_is_ignored(tmp_path):
+    """A pytest run creates 20+ cache entries. Counting them as out-of-scope
+    changes buried the single real change on the first live run."""
+    (tmp_path / "real.py").write_text("x")
+    before = snapshot(tmp_path)
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "real.cpython-313.pyc").write_bytes(b"\x00")
+    (tmp_path / ".pytest_cache").mkdir()
+    (tmp_path / ".pytest_cache" / "CACHEDIR.TAG").write_text("tag")
+    (tmp_path / "genuine_new.py").write_text("y")
+    changes = diff_snapshots(before, snapshot(tmp_path))
+    assert changes.added == {"genuine_new.py"}
