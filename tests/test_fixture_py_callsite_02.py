@@ -139,3 +139,32 @@ def test_a_crash_caused_by_the_null_currency_still_fails_openq(fixture, tmp_path
     result = grade(fixture, tree)
     assert result.hazard_results["H-OPENQ"] == "fail", result.hazard_results
     assert result.hazard_results["H-CALLSITE"] == "pass", result.hazard_results
+
+
+def test_the_container_sees_exactly_the_manifest(fixture, tmp_path):
+    """Spec 5 is a security invariant, not a style preference.
+
+    The host-side check above proves what we meant to copy. This proves what
+    the agent can actually see, which is the property that matters: if the
+    grader, the reference solutions or hazards.yaml reach the agent, every
+    number this harness produces is worthless, and the failure is silent
+    because a model that read the answers looks like a model that solved the
+    problem.
+    """
+    from harness.fixture import assert_container_manifest
+
+    staged = tmp_path / "staged"
+    stage_agent_tree(fixture, staged)
+    assert_container_manifest(fixture, "localhost/odr-agent:latest", staged)
+
+
+def test_the_answer_key_is_not_reachable_from_the_staged_tree(fixture, tmp_path):
+    """The grader and the reference solutions are siblings of repo/ on the
+    host. Staging must take repo/ alone."""
+    staged = tmp_path / "staged"
+    stage_agent_tree(fixture, staged)
+
+    visible = {p.name for p in staged.rglob("*")}
+    for answer_key in ("grader", "known_good", "known_bad", "hazards.yaml"):
+        assert answer_key not in visible, f"{answer_key} reached the agent tree"
+    assert (staged / "pricing" / "report.py").is_file()
