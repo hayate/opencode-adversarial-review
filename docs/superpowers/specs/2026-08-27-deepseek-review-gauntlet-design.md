@@ -607,6 +607,41 @@ a host path would be dereferenced by the host before the sandbox ever starts.
 **The agent sandbox is also the sterility mechanism** - see section 6.0. It is
 not an optional hardening layer that a host subprocess could substitute for.
 
+### 12.0 Accepted limit: the grader shares a process with subject code
+
+The hidden grader's fixtures import the subject's modules - `notifications.models`
+and friends - so model-authored module-level code executes inside the pytest
+process that also holds the writable `/out` mount carrying `report.json`. An
+`atexit` handler registered by subject code can therefore wait for
+pytest-json-report to save the report and rewrite every outcome.
+
+Measured on 2026-08-27 rather than argued:
+
+| Attempt | Result |
+|---|---|
+| Rewrites the report only | **Caught** - the report is cross-checked against pytest's exit status and marked invalid |
+| Also forces the exit status (`os._exit(0)`) | **Succeeds** - an unsolved tree grades as a pass |
+
+No in-process measure closes this, because the subject shares the process with
+the authority. Closing it properly means grader tests exercising the subject
+**out of process** and asserting on its output, so subject code never runs
+inside the grading process - a constraint on how every fixture's grader is
+written.
+
+**Decision (Andrea, 2026-08-27): accepted, not fixed.** The models under test
+are untrusted but not adversarial - they are performing benign refactoring
+tasks, and deliberate grader forgery is out of threat model. Every *accidental*
+route to the same outcome IS closed: a stray `conftest.py`, a model-authored
+`pytest.ini`, stale or unchecked-hash bytecode, a subject-owned `dist-info`
+registering a pytest plugin, and `sitecustomize.py` on the import path were each
+reproduced and are each now blocked.
+
+This limit is recorded so that no reader over-trusts a published number. Any
+claim derived from this harness is conditional on the model under test not
+having deliberately attacked the grader, and the harness cannot prove it did
+not. Revisit if the eval is ever run against a model with an incentive to
+score well on it.
+
 ### 12.1 Slice-scoped egress exception (expires before phase 1)
 
 The egress proxy is **not** implemented for the vertical slice. This is a

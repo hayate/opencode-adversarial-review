@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 
 from notifications.digest import digest_subject, format_digest_line
 from notifications.models import Notification
-from notifications.services import format_notification
+from notifications.services import format_notification, guest_timezone
 
 
 class Command(BaseCommand):
@@ -14,4 +14,4 @@ class Command(BaseCommand):
         for note in pending:
             self.stdout.write(format_digest_line(note))
             locale = getattr(note.user, "locale", "en")
-            self.stdout.write(format_notification(note, locale))
+            self.stdout.write(format_notification(note, locale, guest_timezone(note)))

@@ -25,6 +25,13 @@ timezone, so that I can tell at a glance whether it is still relevant.
 *   The time is shown in the guest's own timezone, not the server's.
 *   This applies consistently everywhere a notification is rendered for a
     guest.
+*   **The renderer takes the timezone from its caller.** A sibling ticket that
+    has already merged fixed the shared contract as
+    `format_notification(notification, locale, tz)`, so the same renderer can
+    serve the SMS surface landing next sprint - there the recipient is not the
+    notification's own user, so the renderer cannot look the timezone up for
+    itself. Fill the contract in; do not have `format_notification` resolve the
+    timezone internally.
 
 **Out of scope / exclusions**
 
@@ -47,6 +54,8 @@ timezone, so that I can tell at a glance whether it is still relevant.
     created.
 *   The time shown is in the guest's own timezone.
 *   The rendering is consistent across every surface a guest can reach.
+*   Every caller of `format_notification` supplies the timezone. None of them
+    is left on the old signature.
 *   The nightly digest's own output is unchanged.
 
 **Format**

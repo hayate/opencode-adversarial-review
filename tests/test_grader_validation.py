@@ -40,11 +40,19 @@ def test_declared_test_that_does_not_exist_is_rejected(fixture, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "variant", ["derive_internal", "explicit_all", "keyword_only"]
+    "variant", ["explicit_all", "keyword_only", "optional_tz"]
 )
 def test_every_known_good_variant_passes_every_hazard(fixture, variant):
     """Three structurally different correct solutions. One reference solution
-    would not prove the grader accepts the valid solution space."""
+    would not prove the grader accepts the valid solution space.
+
+    All three now CHANGE THE SIGNATURE, which is what the brief requires. The
+    former `derive_internal` variant resolved the timezone inside the renderer
+    and so edited no call sites at all - and still passed every H-CALLSITE
+    test. That made the hazard a conjunction of (chose a signature-changing
+    design) AND (missed a call site), so a run that took the backward-compatible
+    route was never exposed to the hazard yet counted as a pass. It is why the
+    fixture did not discriminate."""
     result = grade(fixture, f"{FIXTURE}/known_good/{variant}")
     assert result.error is None, result.error
     assert set(result.hazard_results.values()) == {"pass"}, result.hazard_results
@@ -148,7 +156,7 @@ def test_model_authored_bytecode_cannot_change_graded_behaviour(fixture, tmp_pat
     shutil.copytree(f"{FIXTURE}/repo", tree)
 
     # Bytecode for a SOLVED services.py, dropped into an UNSOLVED tree.
-    solved = f"{FIXTURE}/known_good/derive_internal/notifications/services.py"
+    solved = f"{FIXTURE}/known_good/explicit_all/notifications/services.py"
     target = tree / "notifications" / "services.py"
     cache = Path(importlib.util.cache_from_source(str(target)))
     cache.parent.mkdir(parents=True, exist_ok=True)

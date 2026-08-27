@@ -19,7 +19,6 @@ def guest_timezone(notification):
     return getattr(profile, "timezone", None)
 
 
-def format_notification(notification, locale):
+def format_notification(notification, locale, tz=None):
     """Render a notification for display to a guest."""
-    stamp = _stamp(notification, guest_timezone(notification))
-    return f"[{locale}] {notification.title}: {notification.body}{stamp}"
+    return f"[{locale}] {notification.title}: {notification.body}{_stamp(notification, tz)}"
