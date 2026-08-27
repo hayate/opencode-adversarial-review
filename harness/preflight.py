@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
@@ -61,7 +60,12 @@ def preflight(
                 f"{path} has permission {mode:04o}; secrets must be 0600"
             )
 
-    credentials = env if env is not None else {**load_eval_env(env_file), **os.environ}
+    # The key FILE only. eval.py reads credentials from load_eval_env() and
+    # never from os.environ, so validating the ambient environment here meant
+    # the one check whose whole job is "catch this before spending money" was
+    # checking a different source than the spender - and because os.environ
+    # came second it could even validate a different key than the one used.
+    credentials = env if env is not None else load_eval_env(env_file)
     for key in REQUIRED_CREDENTIALS:
         if not credentials.get(key):
             problems.append(f"{key} is not set (run: bash ~/maya/odr-keys.sh)")

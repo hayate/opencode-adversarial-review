@@ -100,3 +100,19 @@ def test_build_detritus_is_ignored(tmp_path):
     (tmp_path / "genuine_new.py").write_text("y")
     changes = diff_snapshots(before, snapshot(tmp_path))
     assert changes.added == {"genuine_new.py"}
+
+
+def test_an_unreadable_file_does_not_crash_the_whole_eval(tmp_path):
+    """snapshot() deliberately never opens a FIFO because reading one blocks
+    forever, but it did open unreadable regular files - so a model-authored
+    mode-000 file raised PermissionError out of run_agent and out of the eval,
+    losing summary.json for every already-paid run."""
+    locked = tmp_path / "locked.py"
+    locked.write_text("x = 1\n")
+    locked.chmod(0o000)
+    try:
+        result = snapshot(tmp_path)
+    finally:
+        locked.chmod(0o644)
+    assert "locked.py" in result
+    assert result["locked.py"].startswith("unreadable:")

@@ -12,6 +12,7 @@ import pytest
 from harness.fixture import (
     FixtureViolation,
     load_fixture,
+    manifest_lines,
     stage_agent_tree,
 )
 
@@ -31,7 +32,9 @@ def _make_fixture(tmp_path):
         "    origin: invented\n"
         "    tests: ['_grader/test_hazard.py::test_x']\n"
     )
-    (fx / "manifest.txt").write_text("app/services.py\n")
+    (fx / "manifest.txt").write_text(
+        "\n".join(manifest_lines(fx / "repo")) + "\n"
+    )
     return fx
 
 
@@ -126,3 +129,57 @@ def test_rejects_build_detritus(tmp_path):
     (fx / "repo" / "app" / "__pycache__" / "services.cpython-313.pyc").write_bytes(b"\x00")
     with pytest.raises(FixtureViolation, match="__pycache__"):
         stage_agent_tree(load_fixture(fx), tmp_path / "staged")
+
+
+# --- Identity is content, not just a path list ---
+
+
+def test_same_path_content_drift_is_rejected(tmp_path):
+    """The manifest compared paths only, so an edit that kept every filename
+    was accepted. Provenance records HEAD, so a published run could claim the
+    committed fixture while measuring a locally modified one - and fixture
+    drift can interact differently with the two models."""
+    fx = _make_fixture(tmp_path)
+    (fx / "repo" / "app" / "services.py").write_text("def f():\n    return 2\n")
+    with pytest.raises(FixtureViolation, match="manifest"):
+        stage_agent_tree(load_fixture(fx), tmp_path / "staged")
+
+
+def test_mode_drift_is_rejected(tmp_path):
+    fx = _make_fixture(tmp_path)
+    (fx / "repo" / "app" / "services.py").chmod(0o755)
+    with pytest.raises(FixtureViolation, match="manifest"):
+        stage_agent_tree(load_fixture(fx), tmp_path / "staged")
+
+
+def test_an_intact_fixture_still_stages(tmp_path):
+    fx = _make_fixture(tmp_path)
+    stage_agent_tree(load_fixture(fx), tmp_path / "staged")
+
+
+def test_the_shipped_fixture_matches_its_committed_manifest():
+    """test_fixture.py otherwise only ever exercises synthetic trees, so drift
+    on the real fixture was uncaught by the suite."""
+    stage_agent_tree(load_fixture("fixtures/py-callsite-01"), None)
+
+
+def test_the_container_sees_exactly_the_manifest(tmp_path):
+    """The host check proves what we meant to copy; this proves what the agent
+    can actually see. It had no callers anywhere in the repo until round 1."""
+    from harness.fixture import assert_container_manifest
+
+    fixture = load_fixture("fixtures/py-callsite-01")
+    staged = tmp_path / "staged"
+    stage_agent_tree(fixture, staged)
+    assert_container_manifest(fixture, "localhost/odr-agent:latest", staged)
+
+
+def test_an_extra_file_visible_in_the_container_is_a_violation(tmp_path):
+    from harness.fixture import assert_container_manifest
+
+    fixture = load_fixture("fixtures/py-callsite-01")
+    staged = tmp_path / "staged"
+    stage_agent_tree(fixture, staged)
+    (staged / "ANSWERS.md").write_text("the timezone goes in three call sites\n")
+    with pytest.raises(FixtureViolation, match="container manifest"):
+        assert_container_manifest(fixture, "localhost/odr-agent:latest", staged)

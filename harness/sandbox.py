@@ -47,6 +47,11 @@ def run_in_sandbox(
     name = f"{NAME_PREFIX}{uuid.uuid4().hex[:12]}"
     cmd = [
         "podman", "run", "--rm", "--name", name,
+        # --network none constrains the CONTAINER; without this podman would
+        # still reach a registry FROM THE HOST when the image is missing, and
+        # a substituted local tag would then execute while provenance reported
+        # the digest recorded at build time.
+        "--pull=never",
         "--network", network,
         "--security-opt", "no-new-privileges",
         "--cap-drop", "ALL",

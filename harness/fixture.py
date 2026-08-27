@@ -8,7 +8,9 @@ indistinguishable from a model that solved the problem.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +36,11 @@ class Fixture:
     hazards: list[dict]
     manifest: set[str]
     scope: list[str]
+
+    @property
+    def manifest_paths(self) -> set[str]:
+        """Just the paths, for checks that can only observe visibility."""
+        return {line.rsplit("  ", 1)[-1] for line in self.manifest}
 
     @property
     def repo_dir(self) -> Path:
@@ -62,6 +69,29 @@ def load_fixture(path: Path) -> Fixture:
         manifest=manifest,
         scope=data.get("scope") or [],
     )
+
+
+def manifest_lines(repo: Path) -> list[str]:
+    """Content-addressed fixture identity: digest, mode, path.
+
+    A path list alone accepts any edit that keeps every filename. Provenance
+    records only HEAD, so a published run could claim the committed fixture
+    while measuring a locally modified one - and fixture drift can interact
+    differently with the two models, manufacturing a differential.
+    """
+    lines = []
+    for path in sorted(repo.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        mode = stat.S_IMODE(path.lstat().st_mode)
+        lines.append(
+            f"{digest.hexdigest()}  {mode:04o}  {path.relative_to(repo).as_posix()}"
+        )
+    return sorted(lines)
 
 
 def _validate(repo: Path) -> None:
@@ -95,22 +125,22 @@ def _validate(repo: Path) -> None:
             raise FixtureViolation(f"path escapes repo/: {entry}")
 
 
-def _relative_files(root: Path) -> set[str]:
-    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
-
-
-def stage_agent_tree(fixture: Fixture, dest: Path) -> None:
+def stage_agent_tree(fixture: Fixture, dest: Path | None) -> None:
+    """Validate the fixture and copy repo/ to dest. dest=None validates only."""
     repo = fixture.repo_dir
     _validate(repo)
 
-    present = _relative_files(repo)
+    present = set(manifest_lines(repo))
     if present != fixture.manifest:
         missing = sorted(fixture.manifest - present)
         unlisted = sorted(present - fixture.manifest)
         raise FixtureViolation(
-            f"manifest mismatch for {fixture.id}: missing={missing} unlisted={unlisted}"
+            f"manifest mismatch for {fixture.id} (digest, mode and path must all "
+            f"match): missing={missing} unlisted={unlisted}"
         )
 
+    if dest is None:
+        return
     dest = Path(dest)
     if dest.exists():
         shutil.rmtree(dest)
@@ -132,9 +162,10 @@ def assert_container_manifest(fixture: Fixture, image: str, staged: Path) -> Non
             f"{result.stderr[-500:]}"
         )
     seen = {line for line in result.stdout.splitlines() if line}
-    if seen != fixture.manifest:
+    expected = fixture.manifest_paths
+    if seen != expected:
         raise FixtureViolation(
             f"container manifest mismatch for {fixture.id}: "
-            f"unlisted={sorted(seen - fixture.manifest)} "
-            f"missing={sorted(fixture.manifest - seen)}"
+            f"unlisted={sorted(seen - expected)} "
+            f"missing={sorted(expected - seen)}"
         )

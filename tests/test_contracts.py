@@ -86,3 +86,46 @@ def test_positive_control_proves_the_sterile_assertions_have_teeth():
     indistinguishable from one passing because isolation works."""
     seeded = json.loads((C / "debug-config-seeded.json").read_text())
     assert "canary-provider" in (seeded.get("provider") or {})
+
+
+def test_the_event_stream_actually_contains_step_start():
+    """The type-set assertion above is a SUBSET check: it catches an unexpected
+    new type but not a field disappearing. count_turns() counts step_start and
+    nothing else, so if that event were renamed turns would read 0 forever, the
+    turn cap could never fire, and wall clock - the arm-correlated bound -
+    would be all that was left."""
+    assert any(e["type"] == "step_start" for e in _events())
+
+
+def test_bash_metadata_carries_the_exit_code():
+    """trace.tests_succeeded reads state.metadata.exit. Nothing pinned it, so a
+    rename would silently report that neither model's test run passed."""
+    export = json.loads((C / "session-export.json").read_text())
+    exits = [
+        (p.get("state") or {}).get("metadata", {}).get("exit")
+        for m in export["messages"]
+        for p in m.get("parts", [])
+        if p.get("type") == "tool" and p.get("tool") == "bash"
+    ]
+    assert exits, "no bash tool call captured"
+    assert any(isinstance(e, int) for e in exits), exits
+
+
+def test_the_export_carries_a_cost():
+    """Recorded per run and summed into the report. An unpinned rename makes
+    every record's cost null and total spend unobservable."""
+    export = json.loads((C / "session-export.json").read_text())
+    assert isinstance((export.get("info") or {}).get("cost"), (int, float))
+
+
+def test_read_and_edit_tool_inputs_use_filePath():
+    """trace derives read_paths/edited_paths from state.input.filePath."""
+    export = json.loads((C / "session-export.json").read_text())
+    seen = {
+        p.get("tool")
+        for m in export["messages"]
+        for p in m.get("parts", [])
+        if p.get("type") == "tool"
+        and "filePath" in ((p.get("state") or {}).get("input") or {})
+    }
+    assert {"read", "edit"} & seen, seen

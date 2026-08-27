@@ -77,10 +77,19 @@ def snapshot(tree: Path) -> dict[str, str]:
         elif stat.S_ISDIR(info.st_mode):
             out[rel] = f"dir:{mode:04o}"
         elif stat.S_ISREG(info.st_mode):
-            digest = hashlib.sha256()
-            with path.open("rb") as handle:
-                while chunk := handle.read(CHUNK):
-                    digest.update(chunk)
+            # A model-authored mode-000 file used to raise PermissionError out
+            # of snapshot(), out of run_agent and out of the eval - losing
+            # summary.json for every already-paid run. The function already
+            # refuses to open FIFOs for the same class of reason; this is the
+            # same care applied to regular files.
+            try:
+                digest = hashlib.sha256()
+                with path.open("rb") as handle:
+                    while chunk := handle.read(CHUNK):
+                        digest.update(chunk)
+            except OSError:
+                out[rel] = f"unreadable:{mode:04o}:{info.st_size}"
+                continue
             out[rel] = f"file:{mode:04o}:{digest.hexdigest()}"
         else:
             out[rel] = f"special:{mode:04o}"

@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from harness.fixture import Fixture, stage_agent_tree
+from harness.fixture import Fixture, assert_container_manifest, stage_agent_tree
 from harness.sandbox import run_in_sandbox
 from harness.snapshot import Changes, diff_snapshots, snapshot
 
@@ -387,6 +387,12 @@ def run_agent(
     """
     workdir = Path(workdir)
     stage_agent_tree(fixture, workdir)
+    # Spec section 5 rule 6. stage_agent_tree proves what the host INTENDED to
+    # copy; this proves what actually became visible, which is the claim that
+    # matters. It had no callers at all until round 1 of the review gauntlet -
+    # and per fixture.py's own docstring a leak here is silent, because a model
+    # that read the answers looks like a model that solved the problem.
+    assert_container_manifest(fixture, AGENT_IMAGE, workdir)
     before = snapshot(workdir)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -402,6 +408,7 @@ def run_agent(
         }
         cmd = [
             "podman", "run", "--rm", "--name", name,
+            "--pull=never",
             "--network", "bridge",
             "--security-opt", "no-new-privileges",
             "--cap-drop", "ALL",

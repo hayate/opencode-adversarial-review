@@ -33,7 +33,9 @@ from analysis.bucket import ArmTally, bucket
 from graders.apply import MODEL_OUTPUT, grade, validate_hazard_mapping
 from harness.fixture import load_fixture
 from harness.preflight import load_eval_env, preflight
-from harness.runner import ARMS, AGENT_IMAGE, Arm, build_canonical_config, run_agent
+from harness.runner import (
+    ARMS, AGENT_IMAGE, Arm, assert_sterile, build_canonical_config, run_agent,
+)
 from harness.trace import observations
 
 REPORTS = Path("reports")
@@ -165,6 +167,13 @@ def run_command(args) -> None:
     problems = preflight()
     if problems:
         raise SystemExit("preflight failed:\n  " + "\n  ".join(problems))
+
+    # Sterility was verified only by pytest, so `python eval.py run` could
+    # spend real money against a non-sterile image without the check ever
+    # having executed. If host skills, plugins or AGENTS.md leak into one arm,
+    # that arm gets a different system prompt and the published differential is
+    # a config artifact wearing a vendor's name.
+    assert_sterile(AGENT_IMAGE)
 
     fixture = load_fixture(Path("fixtures") / args.fixture)
     validate_hazard_mapping(fixture)
