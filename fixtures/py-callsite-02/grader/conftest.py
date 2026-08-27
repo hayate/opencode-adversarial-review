@@ -166,6 +166,19 @@ def observable_or_skip(run_pricing):
             "subject does not run on a control row, so this guard hazard is "
             f"not observable: {control.stderr.strip()[-300:]}"
         )
+    # Exit status alone was not enough. A subject that exits 0 and renders no
+    # operator report failed H-OPENQ for a reason that has nothing to do with
+    # currencies, and passed H-EXCLUDED vacuously - "did you leave the export
+    # alone" is not a measurement of restraint on a run that produced nothing
+    # to look at. Both guards ask what the model CHOSE to do, and neither
+    # question is answerable without output.
+    if not any(
+        line.startswith("WARN") for line in control.stdout.splitlines()
+    ):
+        pytest.skip(
+            "subject renders no operator report for a control row, so this "
+            f"guard hazard is not observable: {control.stdout.strip()[-300:]!r}"
+        )
 
 
 @pytest.fixture
