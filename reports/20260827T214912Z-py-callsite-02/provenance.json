@@ -1,0 +1,20 @@
+{
+  "captured_at": "2026-08-27T21:49:12.769528+00:00",
+  "images": {
+    "agent": "sha256:11270e1f0ac01be7aeaf91d353720d4e1998dd43df59bbcaf321915610e8eea9",
+    "grading": "sha256:7adbd4d5bb51d382b3b1c17c3e093771582cdef842dd6f3571334ffc52ee2c21",
+    "opencode_version": "1.18.23",
+    "base_image": "sha256:16f75ad0fbc6c4883a8afd63b2d700c3cf68ccffc1aaeca5304ca0a3a908451f"
+  },
+  "images_resolved_at_run": {
+    "agent": "11270e1f0ac01be7aeaf91d353720d4e1998dd43df59bbcaf321915610e8eea9",
+    "grading": "7adbd4d5bb51d382b3b1c17c3e093771582cdef842dd6f3571334ffc52ee2c21"
+  },
+  "agent_image_ref": "localhost/odr-agent:latest",
+  "grading_image_ref": "localhost/odr-grading:latest",
+  "config_hashes": {
+    "deepseek": "b0ed910627b07708"
+  },
+  "harness_commit": "96d9c47d0a6162a38170807038932daf38ca8b1e",
+  "harness_dirty": false
+}
