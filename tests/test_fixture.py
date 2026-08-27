@@ -218,3 +218,19 @@ def test_a_reference_tree_that_does_not_exist_is_a_violation(tmp_path):
     fixture = load_fixture(_with_reference(tmp_path, "no_such_variant"))
     with pytest.raises(FixtureViolation, match="no_such_variant"):
         fixture.known_good_dir
+
+
+@pytest.mark.parametrize("hostile", ["/etc", "../repo", "a/b", "."])
+def test_a_reference_that_is_not_a_plain_directory_name_is_refused(
+    tmp_path, hostile
+):
+    """`reference` is joined onto the fixture root, and pathlib drops
+    everything left of an absolute part - so `/etc` yields Path('/etc'),
+    is_dir() passes, and validate_reference_solution would copytree it as the
+    subject. `..` escapes the same way. hazards.yaml is host-authored so this
+    is not an attack surface, but _validate one function away is explicitly
+    paranoid about this exact shape.
+    """
+    fixture = load_fixture(_with_reference(tmp_path, hostile))
+    with pytest.raises(FixtureViolation, match="plain directory name"):
+        fixture.known_good_dir

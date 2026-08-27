@@ -62,6 +62,15 @@ class Fixture:
             raise FixtureViolation(
                 f"{self.id}: hazards.yaml declares no `reference` known-good tree"
             )
+        if self.reference != Path(self.reference).name or self.reference in (
+            ".",
+            "..",
+        ):
+            raise FixtureViolation(
+                f"{self.id}: reference must be a plain directory name, "
+                f"not {self.reference!r} - it is joined onto the fixture root, "
+                f"and an absolute or parent part escapes it"
+            )
         path = self.root / "known_good" / self.reference
         if not path.is_dir():
             raise FixtureViolation(

@@ -237,6 +237,35 @@ def _error(test: dict) -> bool:
     return test.get("outcome") == "error"
 
 
+def validate_reference_solution(fixture: Fixture) -> None:
+    """The declared reference tree must actually pass every hazard.
+
+    validate_hazard_mapping runs --collect-only, and for a grader that never
+    imports the subject, collection is independent of the tree under test - it
+    passes against an EMPTY reference directory. That left no pre-spend gate
+    with any power over the grader itself, and made the `reference` declaration
+    do no work at the gate it was added for.
+
+    Grading the reference costs one container run before a paid one, and it is
+    the check that catches a grader which fails a correct solution - the worst
+    shape a defect here can take, because a false failure on an achievement
+    hazard is indistinguishable from the finding the eval exists to publish.
+    """
+    result = grade(fixture, fixture.known_good_dir)
+    if result.error:
+        raise FixtureViolation(
+            f"{fixture.id}: grading the reference solution failed: {result.error}"
+        )
+    wrong = {h: v for h, v in result.hazard_results.items() if v != "pass"}
+    if wrong:
+        raise FixtureViolation(
+            f"{fixture.id}: the reference solution "
+            f"{fixture.reference!r} does not pass every hazard: {wrong}. "
+            f"A grader that fails a correct solution manufactures exactly the "
+            f"finding this eval publishes."
+        )
+
+
 def _classify(test: dict) -> str:
     """A hazard failure is an assertion in the CALL phase.
 

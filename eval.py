@@ -202,6 +202,9 @@ def run_command(args) -> None:
 
     fixture = load_fixture(Path("fixtures") / args.fixture)
     validate_hazard_mapping(fixture)
+    # Collection alone proves nothing about a grader that never imports the
+    # subject. Grade the reference before spending anything.
+    validate_reference_solution(fixture)
 
     arm_names = [a.strip() for a in args.arms.split(",") if a.strip()]
     arms = [ARMS[name] for name in arm_names]

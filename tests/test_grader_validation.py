@@ -392,3 +392,41 @@ def test_a_skip_raised_during_the_call_phase_is_also_censoring(fixture):
     result = interpret_report(fixture, report)
     assert result.hazard_results["H-OPENQ"] == "invalid"
     assert result.cause == "model_output"
+
+
+def test_the_reference_solution_must_actually_pass_before_any_spend(fixture):
+    from graders.apply import validate_reference_solution
+
+    validate_reference_solution(fixture)
+
+
+def test_a_reference_solution_that_does_not_pass_is_rejected(fixture, tmp_path):
+    """validate_hazard_mapping stopped being able to fail.
+
+    It runs --collect-only, and for a grader that never imports the subject,
+    collection is completely independent of the tree under test - it passes
+    against an EMPTY reference directory, verified. So the only gate standing
+    between a broken grader and a paid run had gone hollow, and the `reference`
+    declaration did no work at the gate it was added for.
+
+    Every defect this round found in the grader itself - a probe that failed a
+    correct solution, a staging fault published as a model failure, a contracts
+    key coupled by two independent literals - would have been caught here, for
+    the cost of one container run before spending anything.
+    """
+    import shutil
+
+    from graders.apply import validate_reference_solution
+
+    root = tmp_path / fixture.id
+    shutil.copytree(fixture.root, root)
+    (root / "known_good" / "empty_tree").mkdir()
+    hazards = root / "hazards.yaml"
+    hazards.write_text(
+        hazards.read_text().replace(
+            f"reference: {fixture.reference}", "reference: empty_tree"
+        )
+    )
+
+    with pytest.raises(FixtureViolation, match="reference solution"):
+        validate_reference_solution(load_fixture(root))
