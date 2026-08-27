@@ -188,7 +188,7 @@ def exit_is_attributable(command: str) -> bool:
 
 
 def _bash_reads(segment: str) -> list[str]:
-    toks = _tokens(segment)
+    toks, _ = _shell_parts(segment)
     if not toks:
         return []
     head, args = _head(toks), toks[1:]
@@ -205,38 +205,71 @@ def _bash_reads(segment: str) -> list[str]:
     return []
 
 
-def _redirect_targets(segment: str) -> list[str]:
-    """Redirect destinations, blind to any `>` that never left a string.
+_OPERATORS = {">", ">>", ">&", "<", "<<", "|", "||", "&", "&&", ";", "(", ")"}
 
-    The previous regex ran over raw text, so `python -c "ops = [\'<\', \'>\']"`
-    recorded an edit to `\',` - visible in the committed py-callsite-01 report.
-    shlex with punctuation_chars keeps a quoted string as ONE token and emits
-    `>` and `>>` as operators of their own, so only an operator in shell
-    position can name a target.
 
-    On unbalanced quotes it reports NOTHING rather than falling back to the
-    regex. That under-reports edits, which pushes first_edit later and makes
-    read_before_edit more generous - the direction that cannot invent the
-    "did not look" reading this module warns about.
+def _shell_parts(segment: str) -> tuple[list[str], list[str]]:
+    """Split a segment into (argument tokens, redirect targets).
+
+    Two artifacts, one cause: _tokens is shlex.split, which respects quotes but
+    leaves shell OPERATORS sitting in the argument list. The old regex then read
+    a quoted `>` as a redirect, and _bash_reads read both `>` and the file being
+    WRITTEN as arguments of the read command - so `cat feeds.py > contracts.json`
+    recorded two reads and named the write target as one of them.
+
+    shlex with punctuation_chars emits `>` and `>>` as operators of their own and
+    keeps a quoted string as ONE token, so a `>` that never left a string cannot
+    be either. `commenters` is cleared, or a `#` would truncate the command and
+    take any redirect after it.
+
+    On unbalanced quotes it falls back to the old tokens and claims NO
+    redirects. That under-reports edits, which pushes first_edit later and makes
+    read_before_edit more generous - the only direction that cannot invent the
+    "did not look" reading this module warns about at length.
     """
     try:
         lexer = shlex.shlex(segment, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        # Default commenters would silently truncate at a `#`, taking any
-        # redirect after it with them.
         lexer.commenters = ""
         toks = list(lexer)
     except ValueError:
-        return []
-    return [
-        toks[i + 1]
-        for i, tok in enumerate(toks)
-        if tok in {">", ">>"} and i + 1 < len(toks)
-    ]
+        return _tokens(segment), []
+
+    args: list[str] = []
+    targets: list[str] = []
+    index = 0
+    while index < len(toks):
+        token = toks[index]
+        if token in {">", ">>", ">&"}:
+            # `2> err` lexes as ('2', '>', 'err'): the fd is not an argument.
+            if args and args[-1].isdigit():
+                args.pop()
+            if index + 1 < len(toks):
+                # `2>&1` redirects onto a descriptor, not onto a file.
+                if token != ">&":
+                    targets.append(toks[index + 1])
+                index += 2
+                continue
+            index += 1
+            continue
+        if token == "<":
+            # An input redirect IS a read, so its target stays an argument.
+            index += 1
+            continue
+        if token in _OPERATORS:
+            index += 1
+            continue
+        args.append(token)
+        index += 1
+
+    start = 0
+    while start < len(args) and _ENV_ASSIGN.match(args[start]):
+        start += 1
+    return args[start:], targets
 
 
 def _bash_edits(segment: str) -> list[str]:
-    toks = _tokens(segment)
+    toks, redirects = _shell_parts(segment)
     out: list[str] = []
     if toks:
         head, args = _head(toks), toks[1:]
@@ -251,7 +284,7 @@ def _bash_edits(segment: str) -> list[str]:
             out.append(plain[-1])
         elif head in {"touch", "truncate", "patch"}:
             out += plain
-    for target in _redirect_targets(segment):
+    for target in redirects:
         # A discarded or external destination is not an edit to the subject.
         # Counting /dev/null put a read and an "edit" at the same tool-call
         # index, so the ordering check reported the file was never read before

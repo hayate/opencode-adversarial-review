@@ -347,3 +347,34 @@ def test_a_quoted_redirect_does_not_disturb_the_read_ordering(command=None):
         must_read={"notifications/views.py"},
     )
     assert obs["read_before_edit"] is True
+
+
+# --- A redirect target is a WRITE, never an argument of the read command ---
+
+
+@pytest.mark.parametrize("command,reads,edits", [
+    # Observed verbatim in the first opus run on py-callsite-02, which recorded
+    # read_paths [..., '>', 'contracts.json', 'cat', '>', 'feed.csv', ...].
+    ("cat pricing/feeds.py > contracts.json",
+     ["pricing/feeds.py"], ["contracts.json"]),
+    ("cat > feed.csv", [], ["feed.csv"]),
+    ("head -20 pricing/report.py 2> /dev/null", ["pricing/report.py"], []),
+    ("cat pricing/model.py >> notes.txt", ["pricing/model.py"], ["notes.txt"]),
+    ("cat pricing/model.py 2>&1", ["pricing/model.py"], []),
+])
+def test_a_redirect_is_not_an_argument_of_the_read_command(command, reads, edits):
+    """_bash_reads took every non-flag token after a read command as a path, so
+    `>` and the file being WRITTEN were both recorded as reads.
+
+    That is the same defect as the quoted-redirect artifact, in the sibling
+    function: _tokens is shlex.split, which leaves shell operators sitting in
+    the argument list. It survived the redirect fix because that fix only
+    touched the edit side, and it surfaced on opus rather than deepseek because
+    the two models redirect at different rates - which is precisely how a
+    parser artifact becomes a differential.
+    """
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert obs["read_paths"] == reads, command
+    assert obs["edited_paths"] == edits, command
