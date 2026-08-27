@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {},
+  "mode": {},
+  "plugin": [],
+  "command": {},
+  "username": "unknown",
+  "compaction": {
+    "auto": false
+  }
+}

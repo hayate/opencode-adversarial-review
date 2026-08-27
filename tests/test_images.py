@@ -75,3 +75,38 @@ def test_digests_are_recorded():
         assert key in digests, f"digests.json is missing {key}"
     assert digests["agent"].startswith("sha256:")
     assert digests["grading"].startswith("sha256:")
+
+
+def test_opencode_ripgrep_works_under_container_constraints(tmp_path):
+    """Regression for a silent, DIFFERENTIAL confound found 2026-08-27.
+
+    opencode downloads ripgrep at first use and extracts it with tar, which
+    cannot chown under rootless podman with --cap-drop ALL. The glob and grep
+    tools then fail. The agent recovers by reading files directly, so the run
+    still "succeeds" and nothing looks wrong - while a model that leans on
+    search to locate call sites is crippled and one that does not is fine.
+    H-CALLSITE is precisely about locating non-obvious call sites, so this
+    would have been measured and published as a model property.
+
+    The image now ships ripgrep from apt. This test exercises the same code
+    path as the glob tool, deterministically and without a model call.
+    """
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    (tmp_path / "other.py").write_text("NEEDLE_TOKEN = 1\n")
+
+    listing = run_in_sandbox(
+        AGENT, tmp_path,
+        ["sh", "-c", "mkdir -p /tmp/h && opencode debug rg files"],
+        network="none", env=SANDBOX_HOME,
+    )
+    assert listing.exit_code == 0, listing.stderr
+    assert "calc.py" in listing.stdout and "other.py" in listing.stdout
+
+    search = run_in_sandbox(
+        AGENT, tmp_path,
+        ["sh", "-c", "mkdir -p /tmp/h && opencode debug rg search NEEDLE_TOKEN"],
+        network="none", env=SANDBOX_HOME,
+    )
+    assert search.exit_code == 0, search.stderr
+    assert "other.py" in search.stdout
+    assert "Operation not permitted" not in search.stderr

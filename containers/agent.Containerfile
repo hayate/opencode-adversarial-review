@@ -13,7 +13,7 @@ ARG OPENCODE_VERSION=1.18.23
 ARG OPENCODE_INSTALLER_SHA256=fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates unzip tar git \
+    && apt-get install -y --no-install-recommends curl ca-certificates unzip tar git ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /tmp/oc-install.sh https://opencode.ai/install \
@@ -22,6 +22,16 @@ RUN curl -fsSL -o /tmp/oc-install.sh https://opencode.ai/install \
     && rm -f /tmp/oc-install.sh
 
 ENV PATH="/root/.opencode/bin:${PATH}"
+
+# ripgrep is installed from apt above, deliberately. opencode otherwise
+# downloads it at first use and extracts it with tar, which cannot chown under
+# rootless podman with --cap-drop ALL:
+#   tar: ...: Cannot change ownership to uid 1001: Operation not permitted
+# The glob and grep tools then fail. Both arms would run with broken search,
+# and the damage is DIFFERENTIAL: a model that leans on search to find call
+# sites is crippled while one that reads files directly is not. Measuring that
+# and calling it code quality is exactly the confound this project exists to
+# avoid. Verified broken 2026-08-27 during contract capture.
 
 # The fixture stack, so the agent can actually run the tests it is asked to run.
 RUN pip install --no-cache-dir \
