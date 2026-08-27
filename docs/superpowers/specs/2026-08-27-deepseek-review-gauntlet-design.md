@@ -263,6 +263,37 @@ Given-When-Then acceptance criteria, Pre-deployment tasks, and Open Questions -
 reality measures a task nobody is actually given. Fixture briefs are written in
 that register, with synthetic content; no real ticket text is copied.
 
+### 7.1b Fixture calibration gates Opus spend
+
+Grader validation asks "does the grader tell a good solution from a bad one?"
+It does **not** ask "is this fixture hard enough to tell two models apart?"
+Those are different questions, and revision 2 only had the first.
+
+**A fixture where both arms pass every hazard every time carries zero
+information**, however many times it is run. Discovered empirically on
+2026-08-27: `py-callsite-01` was run at n=3 on both arms and produced 6/6
+passes and three `neither` buckets - $1.44 spent to learn nothing about the
+models, though a great deal about the harness.
+
+**The calibration screen, run before any Opus spend:**
+
+1. Run the new fixture at n=3 on **DeepSeek alone**. Cost: about $0.03.
+2. If it passes 3/3, the fixture is presumed non-discriminating. Harden it or
+   drop it. Do not spend the Opus arm on it.
+3. Only fixtures that fail at least once on the cheap arm proceed to the full
+   differential.
+
+Across 12 fixtures this is roughly $0.36 of screening protecting about $44 of
+Opus spend, and it prevents assembling a suite that uniformly reports
+`neither`. Screening runs are recorded and reported; a fixture rejected at this
+gate is part of the evidence, not a deleted embarrassment.
+
+Note the screen is a heuristic, not a proof: a fixture DeepSeek always passes
+could still be one Opus always fails, which would be a bucket-3 finding. That
+case is rare enough, and cheap enough to recover by spot-checking rejected
+fixtures on the Opus arm periodically, that the trade is worth it. State the
+assumption rather than hiding it.
+
 ### 7.2 Grader validation gates everything
 
 Each grader is validated before any model run is trusted:
