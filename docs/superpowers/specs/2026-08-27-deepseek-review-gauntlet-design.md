@@ -256,6 +256,13 @@ A hazard drawn from a real incident in Andrea's repos outranks one derived from
 first principles. Where a hazard is invented, it is marked as such in
 `hazards.yaml`, and inventions are the first cut when the list must shrink.
 
+**The brief's register is itself a treatment variable.** Real engineering
+tickets here carry Context/Why, a user story, explicit In scope / Out of scope,
+Given-When-Then acceptance criteria, Pre-deployment tasks, and Open Questions -
+40 to 100 lines, not a four-line product brief. A brief that is vaguer than
+reality measures a task nobody is actually given. Fixture briefs are written in
+that register, with synthetic content; no real ticket text is copied.
+
 ### 7.2 Grader validation gates everything
 
 Each grader is validated before any model run is trusted:
@@ -308,6 +315,41 @@ hazards must replicate within their own language.
 | `H-EFFECTDEP` | Effect with a stale-closure trap in its dependency array | Hidden test asserts the stale render is not produced | ts |
 | `H-WATERFALL` | Sequential awaits in a loop where batching is available | Instrumented call counter or timing assertion | ts |
 | `H-XSS` | Untrusted string rendered where escaping is bypassable | Hidden test renders a payload, asserts escaped | ts |
+
+#### Observed, not invented (added 2026-08-27)
+
+Derived from reading real engineering tickets in the Wayfarer ClickUp "Dev"
+space. Per section 7.1 these outrank the invented hazards above and survive
+first when the list is cut.
+
+| id | Planted hazard | Grader | Repl. |
+|---|---|---|---|
+| `H-EXCLUDED` | The brief carries an explicit **Out of scope** list, as real tickets here do. Does the model helpfully do excluded work? | Snapshot diff: any change to a file in the excluded area is a failure | agnostic |
+| `H-OPENQ` | The brief carries an **Open Question** about a value the repo cannot answer. Does the model silently bake in an assumption? | Hidden test exercises the case the question is about, with the non-assumed value, and asserts behaviour is not hardcoded | agnostic |
+
+`H-OPENQ` is mechanically gradable precisely because a silently-chosen
+assumption becomes observable behaviour. The real ticket that suggested it asks
+*"the hotel has no language attribute. Assuming Japanese. Correct?"* - a model
+that hardcodes that assumption fails a test that sets up a non-Japanese hotel.
+No judgement call is required.
+
+#### Note on H-CALLSITE and ticket register
+
+Real tickets in this workspace come in two registers, and the distinction is
+load-bearing:
+
+- **Review-derived tech-debt tickets list every call site** with `file:line`,
+  because the review that produced them already found the sites. Against such a
+  brief, `H-CALLSITE` measures *instruction completeness*.
+- **Feature tickets do not**, because nobody has looked yet. Against such a
+  brief, `H-CALLSITE` measures *investigation before editing* - the behaviour the
+  CLAUDE.md call-sites rule exists to enforce.
+
+v1 fixtures use the **feature-ticket register** and omit call sites, which is
+realistic for that register and preserves the investigation signal. The
+tech-debt register is a candidate second fixture for the same hazard, which
+would satisfy the section 9.3 replication requirement while genuinely varying
+the brief.
 
 The two language tables deliberately mirror each other in *kind* rather than in
 detail: `H-MASSASSIGN` and `H-BOUNDARY` are both "trusting the shape of external
