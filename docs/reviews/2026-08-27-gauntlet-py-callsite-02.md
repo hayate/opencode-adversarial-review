@@ -14,10 +14,29 @@ already been checked.
 | Mutation over the grader | 11 plausible model mistakes and legitimate refactors, graded | 1 high (hazard independence) |
 | Fixture-design adversarial | Enumerate designs that pass without the hazard firing | 2 blockers, 1 high, 2 medium, 3 low |
 | Silent-failure | Subprocess error paths, attribution of model vs harness faults | 1 high (run in-session; the dispatched lens never reported) |
-| Codex | Cross-family second opinion, run last | pending |
+| Codex | Cross-family second opinion, run last | 3 high, all missed by the agent lenses |
+| Grader mutation (round 3) | Does every grader assertion discriminate? | 0 findings; 1 corpus gap |
 
 Mutation was again the highest-yield technique, and again found what the
 reference trees structurally could not.
+
+## Rounds
+
+**Round 1** ran the fixture-design lens and a subject-mutation matrix.
+**Round 2** ran Codex and the silent-failure lens against what round 1 cleared,
+and found three blockers, two in round 1's own fixes. **Round 3** asked the
+mirror question nobody had asked - not "can a subject bypass the grader" but
+"can every grader assertion actually fail" - and found nothing above the bar.
+
+**Stopped after round 3**, on the rule in CLAUDE.md: a round produced nothing
+exploitable across a security boundary, no boot or deploy failure, and no guard
+that cannot fire. The single flag round 3 raised was a gap in the mutation
+CORPUS, not in the grader: one assertion never failed across 21 trees because
+no tree ran the control row and crashed only on the null-currency contract.
+Adding that tree brought it to 9/9. Round 2's findings were still landing in
+original code and pre-existing harness code as much as in round 1's fixes, so
+this was not yet the random walk - but round 3's were not, and that is the
+signal to stop.
 
 ## Findings
 
@@ -145,6 +164,114 @@ which `apply.py` cross-checks. The in-process rewrite route spec 12.0 measured
 is closed; the tamper-evidence is what holds the line, not the process boundary
 alone. **Docstring corrected**, and the test that pins it now parses rather than
 grepping, since the probe embeds subject imports in a string a child runs.
+
+## Round 2
+
+### BL-3. A DEFAULT currency let the third call site stay untouched (Codex)
+Update reconcile and summary explicitly, give `format_variance` a
+`currency="JPY"` default, and leave recovery.py on its two-argument call. The
+untouched site silently receives exactly the currency the recovery assertion
+wanted, and H-CALLSITE passes with the site never opened - the literal hazard
+this fixture exists to detect. The `defaulted` reference variant defaults to
+`None`, which renders without a currency and fails, which is why the mutation
+matrix could not see it.
+
+**Fixed**: recovery is exercised in two currencies down the same branch. No
+single default satisfies both.
+
+### BL-4. The rendering probe failed a CORRECT solution (silent-failure lens)
+The probe drove the subject through `reconcile()` - a declared call site, a
+file the ticket tells the model to edit. Returning a third value made the probe
+raise while all eight behavioural tests passed, so H-CALLSITE read `fail` with
+both guards green to corroborate it. A false failure on the achievement hazard
+is the worst shape a defect here can take: it is indistinguishable from the
+finding the eval exists to publish.
+
+Absorbing it with a skip made it worse - a genuine missed call site *in*
+reconcile was then censored into a discarded run rather than a failure, which
+the mutation matrix caught immediately.
+
+**Fixed**: the probe constructs its own stand-in and depends on nothing
+model-authored except `format_variance`. The stand-in answers unknown
+attributes rather than raising, so a field a model adds cannot manufacture a
+failure either.
+
+### BL-5. The two guards needed DIFFERENT observability predicates (Codex)
+HI-3's fix gave them the same one, and that was half wrong. H-EXCLUDED observes
+the settlement FILE: a subject that exits 0 and prints nothing still writes a
+byte-correct export, so gating it on rendered output deleted valid evidence of
+restraint. H-OPENQ observes a rendered line, and any-`WARN`-prefix was too weak
+- a renderer returning a bare prefix cleared it and then failed the hazard for
+a reason that is not currencies.
+
+**Fixed**: H-EXCLUDED is gated on the run alone; H-OPENQ on the control row
+rendering one of the two forms a correct tree produces.
+
+### HI-4. H-EXCLUDED did not enforce byte identity (Codex)
+It decoded, split lines, and compared elements 0 and 1, so an appended metadata
+line, a trailing blank line, and LF changed to CRLF all passed - each of which
+breaks the positional loader the ticket names. **Fixed**: compared as bytes
+over the whole file.
+
+### HI-5. Three sites read a value pytest never writes (silent-failure lens)
+pytest-json-report records a fixture failure as TEST-level `error` with the
+setup STAGE reading `failed`. Three sites in `apply.py` read the stage dict for
+`error`: `_classify`'s guard was dead code, `any_failed` meant the exit-status
+cross-check - the thing that makes the report tamper-evident - ignored setup
+failures entirely, and `setup_broken` never fired. Verified directly.
+
+That is HI-2's silent censoring, still live on the path four lines above the
+one it was fixed on. **Fixed**, and censoring now also covers a skip raised
+from the call phase, which is where the probe's own skip lands.
+
+### HI-6. A staging fault published as a model failure (silent-failure lens)
+Both subprocess helpers ran from inside the test body, so a missing subject
+tree - a pure harness fault - landed in the call phase, which `apply.py` reads
+as "the model failed". **Fixed**: asserted in the fixture body, so it lands in
+setup.
+
+### HI-7. The pre-spend gate could no longer fail (silent-failure lens)
+`validate_hazard_mapping` runs `--collect-only`, and for a grader that never
+imports the subject, collection is independent of the tree under test. Verified:
+it passes against an EMPTY reference directory. Every grader defect this round
+found would have been caught before spending anything, for one container run.
+
+**Fixed**: `validate_reference_solution` grades the reference tree in preflight.
+This also subsumes the contracts-key coupling the lens raised separately.
+
+### ME-3. Per-call timeouts did not compose (silent-failure lens)
+Thirteen interpreters at 60s each against a 300s outer cap, so which verdict a
+hang produced depended on how many inputs it hung on: a per-call timeout is a
+call-phase failure graded against the model, the outer cap is `invalid`.
+**Fixed**, and `apply.py`'s claim that "the grader itself is fixed and fast" is
+corrected.
+
+### ME-4. PYTHONSAFEPATH would have manufactured a 100% failure rate
+Both subprocess paths relied on Python prepending the working directory.
+**Fixed**: the child environment is built from an allowlist with `PYTHONPATH`
+set explicitly.
+
+### Deferred with reason
+`censored` sets `cause` for the whole run, so a partly-graded attempt
+increments `ungradable_model_output` while also contributing a real verdict.
+This shape predates the change - `missing_nodeids` behaves identically - and no
+verdict is affected, only a reported counter. Recording censoring per hazard
+means changing `GradeResult` and every consumer, and it changes what a
+published counter means. **Andrea's call, not folded in.**
+
+## Round 3: do the grader's own assertions discriminate?
+
+A technique neither earlier round used. Round 1 enumerated designs; round 2
+mutated subjects. Both aggregate each grader test's result into a hazard
+verdict, so an assertion that can never fail is invisible to them.
+
+`tools/dead_assertions.py` runs every tree in the corpus - the untouched repo,
+three reference solutions, the known-bad tree, and 17 mutations - and reports
+any declared grader test that never fails. Result: **9/9 discriminate over 22
+trees**, and 17/17 mutations land exactly as intended.
+
+Both tools are committed rather than left in a scratchpad, because the next ten
+fixtures need the same gate.
 
 ## Cleared after triage
 
