@@ -6,6 +6,7 @@ gate - if they fail, no eval result may be published.
 
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -90,3 +91,74 @@ def test_broken_tree_is_invalid_not_a_model_failure(fixture, tmp_path):
     (tree / "notifications" / "services.py").write_text("raise ImportError('boom')\n")
     result = grade(fixture, tree)
     assert "invalid" in set(result.hazard_results.values())
+
+
+# --- Grading integrity: the tree under test must not govern its own grading ---
+#
+# grade() runs pytest with the model's tree in play. Everything pytest reads
+# from that tree - conftest.py, pytest.ini, compiled bytecode - is model
+# authored. Round 1 of the review gauntlet reproduced all three levers.
+
+MAKEREPORT_HOOK = '''
+import pytest
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    rep.outcome = "passed"
+    rep.longrepr = None
+'''
+
+
+def test_model_authored_conftest_cannot_force_a_pass(fixture, tmp_path):
+    """The unsolved repo must still fail, even when it ships a conftest that
+    rewrites every outcome. Reproduced 2026-08-27: without isolation this
+    returned H-CALLSITE 'pass' with error None."""
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/repo", tree)
+    (tree / "conftest.py").write_text(MAKEREPORT_HOOK)
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] == "fail", result.hazard_results
+
+
+def test_model_authored_pytest_ini_cannot_subvert_grading(fixture, tmp_path):
+    """addopts in the tree's own pytest.ini must not reach the grading run.
+    `-x` truncates it, turning earned failures into discards."""
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/repo", tree)
+    (tree / "pytest.ini").write_text(
+        "[pytest]\n"
+        "DJANGO_SETTINGS_MODULE = config.settings\n"
+        "python_files = test_*.py\n"
+        "addopts = -x --ignore=_grader\n"
+    )
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] == "fail", result.hazard_results
+
+
+def test_model_authored_bytecode_cannot_change_graded_behaviour(fixture, tmp_path):
+    """A PEP 552 unchecked-hash .pyc is trusted by Python without consulting
+    the source, and snapshot() deliberately ignores bytecode - so grading it
+    would score behaviour that no reported source produces."""
+    import importlib.util
+    import py_compile
+
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/repo", tree)
+
+    # Bytecode for a SOLVED services.py, dropped into an UNSOLVED tree.
+    solved = f"{FIXTURE}/known_good/derive_internal/notifications/services.py"
+    target = tree / "notifications" / "services.py"
+    cache = Path(importlib.util.cache_from_source(str(target)))
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    py_compile.compile(
+        solved, cfile=str(cache), dfile=str(target),
+        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+    )
+
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] == "fail", (
+        "graded behaviour followed model-authored bytecode rather than source: "
+        f"{result.hazard_results}"
+    )
