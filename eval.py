@@ -30,9 +30,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from analysis.bucket import ArmTally, bucket
-from graders.apply import MODEL_OUTPUT, grade, validate_hazard_mapping
+from graders.apply import (
+    GRADING_IMAGE, MODEL_OUTPUT, grade, validate_hazard_mapping,
+)
 from harness.fixture import load_fixture
-from harness.preflight import load_eval_env, preflight
+from harness.preflight import (
+    load_eval_env, preflight, resolve_image_id, verify_image_digests,
+)
 from harness.runner import (
     ARMS, AGENT_IMAGE, Arm, assert_sterile, build_canonical_config, run_agent,
 )
@@ -56,12 +60,16 @@ def _provenance(arms: list[Arm]) -> dict:
     return {
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "images": digests,
-        # Recorded because runs execute by TAG. containers/build.sh writes
-        # digests at build time, so a rebuild between build and run makes a
-        # digest-only provenance block a false statement about what produced
-        # the number - worse than no digest, since a digest reads as verified.
-        "images_recorded_at_build_time_not_resolved_at_run": True,
+        # Runs execute by TAG, so the digests build.sh recorded are only a
+        # claim until the tag is checked against them. verify_image_digests()
+        # gates the run on that; these are what the tags actually resolved to
+        # at run time.
+        "images_resolved_at_run": {
+            "agent": resolve_image_id(AGENT_IMAGE),
+            "grading": resolve_image_id(GRADING_IMAGE),
+        },
         "agent_image_ref": AGENT_IMAGE,
+        "grading_image_ref": GRADING_IMAGE,
         "config_hashes": {
             arm.name: hashlib.sha256(build_canonical_config(arm).encode()).hexdigest()[:16]
             for arm in arms
@@ -165,6 +173,9 @@ class Accounting:
 
 def run_command(args) -> None:
     problems = preflight()
+    problems += verify_image_digests(
+        {"agent": AGENT_IMAGE, "grading": GRADING_IMAGE}
+    )
     if problems:
         raise SystemExit("preflight failed:\n  " + "\n  ".join(problems))
 

@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from harness.preflight import load_eval_env, preflight
+import json
+from pathlib import Path
+
+import pytest
+
+from harness.preflight import load_eval_env, preflight, verify_image_digests
 
 
 def test_preflight_returns_a_list_of_problems():
@@ -75,3 +80,44 @@ def test_a_key_only_in_the_ambient_environment_does_not_satisfy_preflight(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "only-ambient")
     problems = preflight(env_file=env_file)
     assert any("ANTHROPIC_API_KEY" in p for p in problems), problems
+
+
+def test_a_tag_that_no_longer_matches_the_recorded_digest_is_refused(tmp_path):
+    """Both images run by floating tag while provenance copies the digests
+    build.sh recorded. A rebuild between build and run makes provenance a false
+    statement in the one artifact whose whole job is to be checkable - worse
+    than no digest, because a digest reads as verification."""
+    digests = tmp_path / "digests.json"
+    digests.write_text(json.dumps({
+        "agent": "sha256:" + "0" * 64,
+        "grading": "sha256:" + "1" * 64,
+    }))
+    problems = verify_image_digests(
+        {"agent": "localhost/odr-agent:latest",
+         "grading": "localhost/odr-grading:latest"},
+        digests_file=digests,
+    )
+    assert len(problems) == 2, problems
+    assert all("does not match" in p for p in problems), problems
+
+
+def test_missing_digests_are_a_problem_not_a_silent_empty_provenance(tmp_path):
+    """containers/digests.json is gitignored, so a fresh clone produced
+    "images": {} - the least reproducible configuration yielding the emptiest,
+    least alarming provenance block."""
+    problems = verify_image_digests(
+        {"agent": "localhost/odr-agent:latest"},
+        digests_file=tmp_path / "absent.json",
+    )
+    assert any("build.sh" in p for p in problems), problems
+
+
+def test_images_matching_their_recorded_digests_pass():
+    real = Path("containers/digests.json")
+    if not real.exists():
+        pytest.skip("images not built on this machine")
+    assert verify_image_digests(
+        {"agent": "localhost/odr-agent:latest",
+         "grading": "localhost/odr-grading:latest"},
+        digests_file=real,
+    ) == []

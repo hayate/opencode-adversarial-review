@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import stat
 import subprocess
@@ -70,4 +71,61 @@ def preflight(
         if not credentials.get(key):
             problems.append(f"{key} is not set (run: bash ~/maya/odr-keys.sh)")
 
+    return problems
+
+
+def resolve_image_id(ref: str) -> str | None:
+    """The image id the tag currently points at, or None if it is absent."""
+    result = subprocess.run(
+        ["podman", "image", "inspect", ref, "--format", "{{.Id}}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def verify_image_digests(
+    images: dict[str, str], digests_file: Path = Path("containers/digests.json")
+) -> list[str]:
+    """Check that each tag still resolves to the digest build.sh recorded.
+
+    Runs execute by TAG - `localhost/odr-agent:latest` - while provenance
+    copies containers/digests.json verbatim, so a rebuild between build and run
+    made the report a confidently WRONG statement about what produced the
+    number. That is worse than a missing digest, because a digest reads as
+    verification: a reader who pulls it and cannot reproduce the number has no
+    way to tell they are running different software.
+
+    Verifying the tag here means running by tag is sound, without having to
+    thread digests through every podman invocation.
+    """
+    problems: list[str] = []
+    if not digests_file.exists():
+        return [
+            f"{digests_file} is missing, so a run could not record which images "
+            f"produced its numbers (run: bash containers/build.sh)"
+        ]
+    try:
+        recorded = json.loads(digests_file.read_text())
+    except json.JSONDecodeError as exc:
+        return [f"{digests_file} is not valid JSON: {exc}"]
+
+    for key, ref in images.items():
+        expected = recorded.get(key)
+        if not expected:
+            problems.append(f"{digests_file} records no digest for {key!r}")
+            continue
+        actual = resolve_image_id(ref)
+        if actual is None:
+            problems.append(f"{ref} is not present locally (run: bash containers/build.sh)")
+            continue
+        if not actual.startswith("sha256:"):
+            actual = f"sha256:{actual}"
+        if actual != expected:
+            problems.append(
+                f"{ref} does not match the recorded digest: built {expected}, "
+                f"tag now points at {actual} (rebuild drift - re-run "
+                f"containers/build.sh so provenance matches what will run)"
+            )
     return problems
