@@ -986,10 +986,19 @@ def assert_sterile(image: str) -> None:
         sterile = run_in_sandbox(image, work, ["opencode", "debug", "config", "--pure"],
                                  network="none", env=STERILE_ENV)
         config = json.loads(sterile.stdout)
-        if config.get("provider") or config.get("plugin") or config.get("skills"):
-            raise AssertionError(f"agent image is not sterile: {sterile.stdout[:500]}")
+        # NOTE: do NOT check config["plugin"]. Observed 2026-08-27: the resolved
+        # config still LISTS declared plugins even when they are not loaded.
+        # Isolation is verified by what actually loaded - providers, skills.paths,
+        # and injected agents - per spec section 6.0.
+        if config.get("provider"):
+            raise AssertionError(f"host providers leaked: {list(config['provider'])}")
+        if (config.get("skills") or {}).get("paths"):
+            raise AssertionError(f"host skill paths leaked: {config['skills']['paths']}")
         if config.get("model") == "canary/model":
             raise AssertionError("project config leaked into the sterile run")
+        for agent_name in (config.get("agent") or {}):
+            if agent_name.startswith("opencode-memory"):
+                raise AssertionError(f"plugin-injected agent leaked: {agent_name}")
 ```
 
 - [ ] **Step 3: Confirm it passes, then commit**
