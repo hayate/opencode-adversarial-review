@@ -11,7 +11,9 @@ from harness.runner import (
     ModelMismatch,
     assert_sterile,
     build_canonical_config,
+    classify_run,
     count_turns,
+    effective_permissions,
     verify_model_id,
 )
 
@@ -98,3 +100,57 @@ def test_tool_permissions_are_granted():
     permission = _json.loads(STERILE_ENV["OPENCODE_PERMISSION"])
     assert permission["bash"] == "allow"
     assert permission["edit"] == "allow"
+
+
+# --- Round 1 gauntlet: a provider abort must not be graded as a model failure ---
+
+
+def test_a_nonzero_opencode_exit_is_invalid_not_completed():
+    """`opencode run` exiting non-zero means the run did not finish normally -
+    a 429, a 5xx, an expired key, a crash mid-turn. The session export still
+    exists and still carries the right modelID, so without this the half-edited
+    tree is graded and the failure lands in the vendor's numerator. Provider
+    error rates are per-vendor by definition, so this is arm-correlated."""
+    status, error = classify_run(
+        capped=False, turns=8, opencode_exit=1,
+        session=EXPORT, expected_model="deepseek-v4-pro",
+    )
+    assert status == "invalid"
+    assert "exited 1" in (error or "")
+
+
+def test_a_clean_exit_with_a_verified_session_completes():
+    status, error = classify_run(
+        capped=False, turns=8, opencode_exit=0,
+        session=EXPORT, expected_model=EXPORT["messages"][1]["info"]["modelID"],
+    )
+    assert status == "completed", error
+
+
+def test_a_missing_exit_code_does_not_invalidate_a_good_run():
+    """Absent is not non-zero: an older report or a container that died before
+    writing the file must not retroactively invalidate a graded run."""
+    status, _ = classify_run(
+        capped=True, turns=99, opencode_exit=None,
+        session=EXPORT, expected_model=EXPORT["messages"][1]["info"]["modelID"],
+    )
+    assert status == "capped"
+
+
+def test_capping_takes_precedence_over_the_exit_code():
+    status, _ = classify_run(
+        capped=True, turns=99, opencode_exit=137,
+        session=EXPORT, expected_model=EXPORT["messages"][1]["info"]["modelID"],
+    )
+    assert status == "capped"
+
+
+def test_no_permission_is_left_asking_inside_the_container():
+    """Confound #2 was only half fixed. OPENCODE_PERMISSION APPENDS rather than
+    replaces, so `doom_loop: ask` and `external_directory: ask` survived the
+    three allow entries - with no human in the container to answer either.
+    doom_loop fires on an agent that repeats a tool call, which is what a
+    struggling model does, so the handicap is arm-correlated."""
+    effective = effective_permissions("localhost/odr-agent:latest")
+    asking = {k: v for k, v in effective.items() if v == "ask"}
+    assert asking == {}, f"permissions still gated with no human to answer: {asking}"

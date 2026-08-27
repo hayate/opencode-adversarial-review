@@ -28,6 +28,34 @@ class ModelMismatch(Exception):
     """The session used a model other than the one requested."""
 
 
+# OPENCODE_PERMISSION APPENDS to opencode's defaults rather than replacing them
+# (verified in-image 2026-08-27), and resolution is last-match-wins. So an entry
+# named here overrides the default of the same name, but a default NOT named
+# here survives untouched. This is the same merge semantics spec 6.0 recorded
+# for OPENCODE_CONFIG_CONTENT - a fact about one knob that turned out to be a
+# fact about the whole configuration system.
+#
+# The original three-key value therefore left `doom_loop: ask` and
+# `external_directory: ask` live, with no human in the container to answer
+# either. Round 1 of the review gauntlet caught it: confound #2 had only ever
+# been half fixed.
+NONINTERACTIVE_PERMISSION: dict[str, str] = {
+    # Every tool the build agent exposes.
+    "bash": "allow", "edit": "allow", "write": "allow", "read": "allow",
+    "glob": "allow", "grep": "allow", "webfetch": "allow", "websearch": "allow",
+    "task": "allow", "todowrite": "allow", "skill": "allow", "question": "allow",
+    # Not tools - opencode's own guards. doom_loop fires when an agent repeats a
+    # call, which is what a struggling model does; external_directory fires on
+    # scratch work outside /workspace. Both correlate with model style, so
+    # leaving them gated is a differential handicap, not a safety measure:
+    # containment is the sandbox's job, never opencode's prompts.
+    "doom_loop": "allow", "external_directory": "allow",
+    # Allowed together. Denying only the exit would let a model enter plan mode
+    # and be unable to leave it.
+    "plan_enter": "allow", "plan_exit": "allow",
+}
+
+
 STERILE_ENV: dict[str, str] = {
     "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
     "OPENCODE_DISABLE_CLAUDE_CODE": "1",
@@ -49,7 +77,7 @@ STERILE_ENV: dict[str, str] = {
     # handicap that reads as model behaviour, and a DIFFERENTIAL one, since a
     # model that asks permission more often is penalised more. Containment is
     # provided by the sandbox, not by opencode's prompts.
-    "OPENCODE_PERMISSION": '{"bash":"allow","edit":"allow","webfetch":"allow"}',
+    "OPENCODE_PERMISSION": json.dumps(NONINTERACTIVE_PERMISSION),
     "HOME": CONTAINER_HOME,
     "XDG_CONFIG_HOME": f"{CONTAINER_HOME}/.config",
     "XDG_DATA_HOME": f"{CONTAINER_HOME}/.local/share",
@@ -93,6 +121,8 @@ class RunResult:
     cost: float | None = None
     model_verified: bool = False
     error: str | None = None
+    opencode_exit: int | None = None
+    run_stderr: str = ""
 
 
 def build_canonical_config(arm: Arm) -> str:
@@ -150,6 +180,68 @@ def count_turns(events_text: str) -> int:
         if event.get("type") == "step_start":
             turns += 1
     return turns
+
+
+def classify_run(
+    *,
+    capped: bool,
+    turns: int,
+    opencode_exit: int | None,
+    session: dict,
+    expected_model: str,
+) -> tuple[str, str | None]:
+    """Decide a run's status. Returns (status, error).
+
+    Split out of run_agent so the decision is testable without a paid run.
+
+    The opencode exit code is load-bearing and used to be ignored entirely: the
+    run script wrote it to /out/run.exit and nothing ever read the file. A run
+    aborted by the provider - 429, 5xx, expired key, crash mid-turn - still
+    leaves a parseable export whose assistant messages carry the right modelID,
+    so it read as `completed` and its half-edited tree was graded. That is the
+    cleanest path in the repo from "the vendor's API had a bad minute" to "the
+    vendor's model failed the hazard", and provider error rates are per-vendor
+    by definition.
+
+    Absent is not non-zero: a missing exit file never invalidates a run.
+    """
+    if capped:
+        return "capped", f"cap hit after {turns} turns"
+    if opencode_exit not in (None, 0):
+        return "invalid", (
+            f"opencode run exited {opencode_exit}; the run did not complete "
+            f"normally, so its tree is not evidence about the model"
+        )
+    if not session:
+        return "invalid", "no session export"
+    try:
+        verify_model_id(session, expected=expected_model)
+    except ModelMismatch as exc:
+        return "invalid", str(exc)
+    return "completed", None
+
+
+def effective_permissions(image: str) -> dict[str, str]:
+    """Resolve the build agent's wildcard permissions inside the image.
+
+    Reports the LAST entry for each permission type at pattern "*", which is
+    the one that wins. Used by assert_sterile so a re-gated permission fails
+    before a run is paid for rather than showing up as model behaviour.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        result = run_in_sandbox(
+            image, Path(tmp),
+            ["sh", "-c",
+             f"mkdir -p {CONTAINER_HOME}/.config && opencode debug agent build"],
+            network="none", env=STERILE_ENV,
+        )
+    if result.exit_code != 0:
+        raise AssertionError(f"could not resolve agent permissions: {result.stderr[:400]}")
+    effective: dict[str, str] = {}
+    for entry in json.loads(result.stdout).get("permission") or []:
+        if entry.get("pattern") == "*":
+            effective[entry.get("permission")] = entry.get("action")
+    return effective
 
 
 def assert_sterile(image: str) -> None:
@@ -210,6 +302,14 @@ def assert_sterile(image: str) -> None:
         if (config.get("skills") or {}).get("paths"):
             raise AssertionError(f"skill paths leaked: {config['skills']['paths']}")
 
+    # There is no human in the container. A permission left at "ask" is a wall
+    # the agent cannot pass, and which model hits it depends on model style.
+    asking = {k: v for k, v in effective_permissions(image).items() if v == "ask"}
+    if asking:
+        raise AssertionError(
+            f"permissions still gated with nobody to answer: {sorted(asking)}"
+        )
+
 
 _RUN_SCRIPT = r"""
 set -uo pipefail
@@ -242,6 +342,32 @@ if [ -n "$SESSION" ]; then
   printf '%s' "$SESSION" > /out/session-id.txt
 fi
 """
+
+
+def _kill_container(name: str) -> str | None:
+    """Kill and remove by name. Returns a message if it did not take.
+
+    Both return codes used to be discarded. Killing only the podman client
+    leaves the container running, which lets a capped run keep spending against
+    a live credential - the one failure here that costs real money silently.
+    """
+    problems: list[str] = []
+    for argv in (["podman", "kill", name], ["podman", "rm", "-f", name]):
+        result = subprocess.run(argv, capture_output=True, text=True)
+        if result.returncode != 0:
+            err = (result.stderr or "").strip()
+            if "no such container" in err.lower():
+                continue  # already gone is success
+            problems.append(f"podman {argv[1]} failed: {err[:200]}")
+    return "; ".join(problems) or None
+
+
+def _read_exit(path: Path) -> int | None:
+    """The opencode exit code, or None when it was never written."""
+    if not path.exists():
+        return None
+    raw = path.read_text(errors="replace").strip()
+    return int(raw) if raw.lstrip("-").isdigit() else None
 
 
 def run_agent(
@@ -293,18 +419,38 @@ def run_agent(
         events_file = out / "run-events.ndjson"
         deadline = time.monotonic() + wall_clock_s
         capped = False
+        cap_reason = ""
+        cleanup_problem: str | None = None
         turns = 0
 
         while proc.poll() is None:
             time.sleep(2)
             if events_file.exists():
                 turns = count_turns(events_file.read_text(errors="replace"))
-            if turns > max_turns or time.monotonic() > deadline:
+            over_turns = turns > max_turns
+            over_clock = time.monotonic() > deadline
+            if over_turns or over_clock:
                 capped = True
-                subprocess.run(["podman", "kill", name], capture_output=True)
-                subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+                # Name the cap that actually fired. Reporting "turn cap" for a
+                # wall-clock timeout points triage at the wrong cause, and
+                # wall-clock exhaustion is among the most arm-correlated
+                # failure modes available: provider latency, retries, thinking
+                # budget.
+                cap_reason = "turn cap" if over_turns else "wall clock"
+                cleanup_problem = _kill_container(name)
                 break
-        proc.wait(timeout=60)
+
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            # Reachable only when the kill did not take, which is exactly the
+            # state where a paid container is still running. This used to
+            # propagate and abort the whole eval mid-arm, losing the in-flight
+            # record and summary.json for every already-paid run.
+            proc.kill()
+            cleanup_problem = "; ".join(
+                filter(None, [cleanup_problem, "podman client did not exit after kill"])
+            )
 
         events = events_file.read_text(errors="replace") if events_file.exists() else ""
         turns = count_turns(events) if events else turns
@@ -316,22 +462,32 @@ def run_agent(
             except json.JSONDecodeError:
                 session = {}
         run_err = (out / "run.err").read_text(errors="replace") if (out / "run.err").exists() else ""
+        # Written by _RUN_SCRIPT since day one and never read until now.
+        opencode_exit = _read_exit(out / "run.exit")
 
     after = snapshot(workdir)
     changes = diff_snapshots(before, after)
 
-    if capped:
-        return RunResult("capped", changes, session, events, turns,
-                         error=f"cap hit after {turns} turns")
-    if not session:
-        return RunResult("invalid", changes, {}, events, turns,
-                         error=f"no session export; run stderr: {run_err[-600:]}")
-
-    try:
-        verified = verify_model_id(session, expected=arm.model)
-    except ModelMismatch as exc:
-        return RunResult("invalid", changes, session, events, turns, error=str(exc))
+    status, error = classify_run(
+        capped=capped, turns=turns, opencode_exit=opencode_exit,
+        session=session, expected_model=arm.model,
+    )
+    if status == "capped" and cap_reason:
+        error = f"{cap_reason} cap hit after {turns} turns"
+    if error == "no session export":
+        error = f"no session export; run stderr: {run_err[-600:]}"
+    if cleanup_problem:
+        error = f"{error or ''} [container cleanup: {cleanup_problem}]".strip()
 
     cost = (session.get("info") or {}).get("cost")
-    return RunResult("completed", changes, session, events, turns,
-                     cost=cost, model_verified=verified)
+    return RunResult(
+        status, changes, session if status != "invalid" or session else {},
+        events, turns,
+        cost=cost,
+        model_verified=(status == "completed"),
+        error=error,
+        opencode_exit=opencode_exit,
+        # Surfaced on every status, not just the empty-session branch: a
+        # completed run's opencode stderr used to be discarded outright.
+        run_stderr=run_err[-2000:],
+    )
