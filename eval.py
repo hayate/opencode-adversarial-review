@@ -32,6 +32,7 @@ from pathlib import Path
 from analysis.bucket import ArmTally, bucket
 from graders.apply import (
     GRADING_IMAGE, MODEL_OUTPUT, grade, validate_hazard_mapping,
+    validate_reference_solution,
 )
 from harness.fixture import load_fixture
 from harness.preflight import (
