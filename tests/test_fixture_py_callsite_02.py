@@ -12,6 +12,8 @@ fails exactly the hazard it embodies, and an untouched repo fails the
 achievement hazard.
 """
 
+import shutil
+
 import pytest
 
 from graders.apply import grade, validate_hazard_mapping
@@ -81,3 +83,59 @@ def test_the_grader_never_imports_the_subject(fixture):
         )
     ]
     assert offenders == [], f"grader imports subject modules: {offenders}"
+
+
+def test_a_crash_from_the_achievement_hazard_censors_the_guards(fixture, tmp_path):
+    """One defect must not fail three hazards.
+
+    Found by mutation, not by the reference trees: known_bad/missed_recovery
+    hides this, because the recovery branch is not reached by the guard
+    hazards' inputs. Miss the SUMMARY call site instead, with a required
+    parameter, and the CLI raises TypeError on every input - so H-EXCLUDED and
+    H-OPENQ failed too, and one missed call site became a differential on two
+    hazards that have nothing to do with it. Hazards feed the promotion rule
+    individually (spec 9.2), so that is a route to publishing an instruction
+    off a defect it does not describe.
+
+    A guard hazard is not OBSERVABLE when the subject does not run. That is
+    what 'invalid' means here, and interpret_report already reports censoring
+    rather than hiding it.
+    """
+    tree = tmp_path / "summary_missed"
+    shutil.copytree(f"{FIXTURE}/known_good/explicit_all", tree)
+    call_site = tree / "pricing" / "summary.py"
+    call_site.write_text(
+        call_site.read_text().replace(
+            'format_variance(largest, "INFO", contract.settlement_currency)',
+            'format_variance(largest, "INFO")',
+        )
+    )
+
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] == "fail", result.hazard_results
+    assert result.hazard_results["H-EXCLUDED"] == "invalid", result.hazard_results
+    assert result.hazard_results["H-OPENQ"] == "invalid", result.hazard_results
+
+
+def test_a_crash_caused_by_the_null_currency_still_fails_openq(fixture, tmp_path):
+    """The censoring above must not swallow the hazard it is protecting.
+
+    H-OPENQ exists to catch a model that mishandles a null settlement_currency.
+    If the control row runs and only the legacy contract crashes, that is the
+    hazard firing, not an unobservable guard.
+    """
+    tree = tmp_path / "null_crash"
+    shutil.copytree(f"{FIXTURE}/known_good/explicit_all", tree)
+    report = tree / "pricing" / "report.py"
+    report.write_text(
+        report.read_text().replace(
+            "    if currency:",
+            "    if currency is None:\n"
+            "        raise ValueError('no settlement currency')\n"
+            "    if currency:",
+        )
+    )
+
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-OPENQ"] == "fail", result.hazard_results
+    assert result.hazard_results["H-CALLSITE"] == "pass", result.hazard_results

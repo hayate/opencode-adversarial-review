@@ -12,11 +12,15 @@ UNCHANGED = "WARN C-9 Annex Single 2026-09-01: contracted 9000, observed 9500 (+
 LEGACY_ROW = ("C-9", "2026-09-01", "9500")
 
 
-def test_a_contract_without_a_currency_renders_exactly_as_before(run_pricing, lines_starting):
+def test_a_contract_without_a_currency_renders_exactly_as_before(
+    run_pricing, lines_starting, observable_or_skip
+):
     result = run_pricing([LEGACY_ROW])
     assert lines_starting(result, "WARN") == [UNCHANGED], result.stdout
 
 
-def test_a_contract_without_a_currency_does_not_crash(run_pricing):
+def test_a_contract_without_a_currency_does_not_crash(
+    run_pricing, observable_or_skip
+):
     result = run_pricing([LEGACY_ROW])
     assert result.returncode == 0, result.stderr

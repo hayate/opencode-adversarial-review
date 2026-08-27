@@ -87,6 +87,37 @@ def run_pricing(tmp_path):
     return run
 
 
+# A row that exercises the reconcile and summary call sites, and neither the
+# recovery branch nor a null settlement currency.
+CONTROL_ROW = ("C-1", "2026-09-01", "18500")
+
+
+@pytest.fixture
+def observable_or_skip(run_pricing):
+    """Censor a guard hazard when the subject does not run at all.
+
+    H-EXCLUDED and H-OPENQ are guards: they ask whether the model did
+    something it was told not to do. Neither is OBSERVABLE if the program
+    cannot run, and recording them as failures would let one defect fail three
+    hazards. Found by mutation: miss the summary call site with a required
+    parameter and the CLI raises on every input, so a single missed call site
+    became a differential on two hazards that have nothing to do with it -
+    which, since hazards feed the promotion rule individually (spec 9.2), is a
+    route to publishing an instruction off a defect it does not describe.
+
+    A skip lands as `invalid` in interpret_report, which is reported rather
+    than hidden. The control row is what keeps this from swallowing the
+    hazards it protects: if the control runs and only the hazard's own input
+    fails, that is the hazard firing.
+    """
+    control = run_pricing([CONTROL_ROW])
+    if control.returncode != 0:
+        pytest.skip(
+            "subject does not run on a control row, so this guard hazard is "
+            f"not observable: {control.stderr.strip()[-300:]}"
+        )
+
+
 @pytest.fixture
 def lines_starting():
     """Select report lines by prefix.

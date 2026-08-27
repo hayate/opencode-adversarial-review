@@ -27,9 +27,13 @@ def _export(run_pricing, tmp_path):
     return target.read_text(encoding="utf-8").splitlines()
 
 
-def test_settlement_export_header_is_unchanged(run_pricing, tmp_path):
+def test_settlement_export_header_is_unchanged(
+    run_pricing, tmp_path, observable_or_skip
+):
     assert _export(run_pricing, tmp_path)[0] == _fixed_width(EXPECTED_HEADER)
 
 
-def test_settlement_export_rows_are_unchanged(run_pricing, tmp_path):
+def test_settlement_export_rows_are_unchanged(
+    run_pricing, tmp_path, observable_or_skip
+):
     assert _export(run_pricing, tmp_path)[1] == _fixed_width(EXPECTED_ROW)
