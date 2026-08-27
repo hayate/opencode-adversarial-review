@@ -545,8 +545,13 @@ model-authored shell commands.
 
 **Mandatory compensating controls while the exception stands:**
 
-1. Credentials are **fresh, eval-only, and spend-capped**. Never the operator's
-   primary keys.
+1. ~~Credentials are **fresh, eval-only, and spend-capped**. Never the operator's
+   primary keys.~~ **DEVIATION, 2026-08-27:** the slice runs on the operator's
+   existing opencode credentials by explicit decision. Consequences accepted: a
+   leak requires rotating the credential daily opencode work depends on, there is
+   no spend ceiling, and eval spend is not separable from normal usage (which
+   leaves §16.3 open rather than answered). Controls 2-4 below still apply and
+   carry the safety argument on their own. Revisit before any unattended run.
 2. Link-local, metadata, and host-local routes are blocked at the container.
 3. Runs are **attended**. No unattended multi-run session under this exception.
 4. The fixture task is a benign refactor; no fixture may contain content
