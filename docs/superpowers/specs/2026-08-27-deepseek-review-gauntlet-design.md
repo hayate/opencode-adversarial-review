@@ -88,6 +88,9 @@ Every report, README line, and generated instruction carries this scoping.
 | Containment | Rootless podman, two sandboxes | Agent sandbox and grading sandbox are separate |
 | Languages | Python (Django/DRF) + TypeScript (React/Node), 6 fixtures each | Andrea's stack; a third language may be added only if it brings its own replication pairs |
 | Delivery | Staged: 12 fixtures, signal gate, then decide | Do not double fixture spend before knowing a differential exists |
+| Published product | The skill plus its evidence reports; harness optional | The skill is the deliverable, the eval is the justification |
+| Harness scope | opencode only | Consequence of the section 2 estimand, not a preference |
+| Licence | MIT | Permissive, no friction to install |
 
 ### Why a control arm
 
@@ -518,13 +521,57 @@ TDD, before the first real eval run:
 
 ---
 
-## 16. Open questions
+## 16. Publishing
 
-1. Repo name (`deepseek-review-gauntlet` is a working title).
-2. Licence.
-3. Whether eval spend goes on a separate DeepSeek billing account to keep it
+**The published product is the skill, not the harness.** The evaluation is the
+method by which the skill is justified, not the deliverable.
+
+- **Licence:** MIT.
+- **Repo name:** `opencode-deepseek-review`. The harness code lives here during
+  development; the published surface is the skill plus its evidence.
+- **Scope in the name is deliberate.** It matches the ecosystem convention
+  (`opencode-claude-memory`) and makes the narrow claim visible before anyone
+  reads the README.
+
+### 16.1 Harness support is opencode-only, by construction
+
+Section 2 commits to an operational estimand: DeepSeek v4-pro *as driven by
+opencode 1.18.23* under a pinned configuration. Publishing the skill as
+harness-agnostic would assert the findings hold under Cline, Roo, or Aider,
+having measured none of them - the same overreach as a vendor-level claim, moved
+to a different axis.
+
+Therefore:
+
+- **Claims are scoped to opencode.** The README states findings were measured
+  under opencode and may not transfer.
+- **Format stays portable.** opencode loads Claude-Code-format skills, so
+  portability is close to free. We do not advertise it.
+- **Harness portability is a future evidence question, not a promise.** Rerun the
+  existing fixtures under a second harness and report which hazards replicate.
+  Deferred to a possible phase 3; the fixtures would already exist.
+
+### 16.2 Evidence ships with the skill
+
+Even though the harness is not the product, the **evidence reports are published
+alongside the skill**. An instruction reading "DeepSeek frequently skips
+non-obvious call sites" is an opinion; the same instruction carrying `8/10 vs
+1/10, opencode 1.18.23, config hash abc123, 2026-09-14, 2 independent fixtures`
+is a finding.
+
+This is what makes the expiry mechanism in section 10 legible to a reader who is
+not the author. Publishing generated instructions with the numbers stripped off
+would forfeit the property the whole method exists to buy.
+
+The README documents the method in enough detail for a reader to replicate it.
+Publishing the harness source is optional and may follow later.
+
+### 16.3 Still open
+
+1. Whether eval spend goes on a separate DeepSeek billing account to keep it
    legible against normal usage.
 
 Resolved since revision 1: languages are Python (Django/DRF) and TypeScript
-(React/Node), 6 fixtures each; a third language may be added only if it brings
-its own replication pairs (section 9.3).
+(React/Node), 6 fixtures each, a third language only if it brings its own
+replication pairs (section 9.3); licence MIT; repo name
+`opencode-deepseek-review`; opencode-only scope.
