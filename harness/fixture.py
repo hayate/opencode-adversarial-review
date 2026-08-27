@@ -16,7 +16,10 @@ import yaml
 
 from harness.sandbox import run_in_sandbox
 
-FORBIDDEN_NAMES = {".git", ".gitmodules"}
+# __pycache__ is build detritus: it varies per run, breaks byte-identical
+# fixture reset, and a manifest generated while it was present would bless it.
+# Caught 2026-08-27 when a container test run left it inside a fixture.
+FORBIDDEN_NAMES = {".git", ".gitmodules", "__pycache__", ".pytest_cache"}
 
 
 class FixtureViolation(Exception):

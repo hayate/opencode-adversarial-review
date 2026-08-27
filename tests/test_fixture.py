@@ -116,3 +116,13 @@ def test_missing_listed_file_fails_the_manifest(tmp_path):
     (fx / "repo" / "app" / "services.py").unlink()
     with pytest.raises(FixtureViolation, match="manifest"):
         stage_agent_tree(load_fixture(fx), tmp_path / "staged")
+
+
+def test_rejects_build_detritus(tmp_path):
+    """__pycache__ varies per run, so it breaks byte-identical reset - and a
+    manifest generated while it was present would have blessed it."""
+    fx = _make_fixture(tmp_path)
+    (fx / "repo" / "app" / "__pycache__").mkdir()
+    (fx / "repo" / "app" / "__pycache__" / "services.cpython-313.pyc").write_bytes(b"\x00")
+    with pytest.raises(FixtureViolation, match="__pycache__"):
+        stage_agent_tree(load_fixture(fx), tmp_path / "staged")

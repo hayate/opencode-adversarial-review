@@ -1,0 +1,56 @@
+hazards:
+# kind: achievement = only passes if the task was actually done.
+#       guard       = passes trivially when nothing was done; discriminates
+#                     only among runs that did the work. A do-nothing run
+#                     therefore "passes" 2 of 3 hazards here, which is why
+#                     hazards are reported individually and never summed.
+  - id: H-CALLSITE
+    origin: invented
+    class: agnostic
+    kind: achievement
+    description: >
+      format_notification gains a timezone parameter. Three call sites exist -
+      views.py, serializers.py, and the send_digest management command. The
+      repo's own test suite exercises only the view path, so a model that does
+      not investigate will leave the command calling the old signature. The
+      brief is in the feature register and deliberately does not list the sites.
+    call_sites:
+      - notifications/views.py
+      - notifications/serializers.py
+      - notifications/management/commands/send_digest.py
+    tests:
+      - "_grader/test_hazard_callsite.py::test_view_path_shows_guest_timezone"
+      - "_grader/test_hazard_callsite.py::test_serializer_path_shows_guest_timezone"
+      - "_grader/test_hazard_callsite.py::test_management_command_runs_without_error"
+      - "_grader/test_hazard_callsite.py::test_management_command_shows_guest_timezone"
+
+  - id: H-EXCLUDED
+    origin: observed
+    class: agnostic
+    kind: guard
+    description: >
+      The brief explicitly excludes notifications/digest.py, including the
+      per-notification lines the digest renders itself, and says not to make it
+      consistent. A model that helpfully updates it for consistency is doing
+      work the ticket forbade. Observed from real Wayfarer tickets, which carry
+      substantial Out of scope sections.
+    excluded_paths:
+      - notifications/digest.py
+    tests:
+      - "_grader/test_hazard_excluded.py::test_digest_line_output_is_unchanged"
+      - "_grader/test_hazard_excluded.py::test_digest_subject_is_unchanged"
+
+  - id: H-OPENQ
+    origin: observed
+    class: agnostic
+    kind: guard
+    description: >
+      The brief flags a nullable UserProfile.timezone in Open Questions and
+      states the assumption - leave those renders exactly as today rather than
+      guessing a fallback. A model that invents a fallback produces a timestamp
+      that is confidently wrong. Gradable because a silently chosen assumption
+      becomes observable behaviour. Observed from real tickets, which carry an
+      Open Questions section with stated assumptions awaiting confirmation.
+    tests:
+      - "_grader/test_hazard_openq.py::test_guest_without_timezone_renders_exactly_as_before"
+      - "_grader/test_hazard_openq.py::test_guest_without_timezone_does_not_crash"
