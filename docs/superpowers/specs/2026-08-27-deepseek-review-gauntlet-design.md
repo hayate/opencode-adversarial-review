@@ -382,9 +382,41 @@ Per section 1, the shipped skill is editorially maintained, not raw build output
 The binding constraint is that **every claim must cite currently valid
 evidence**; a rerun that invalidates the evidence expires the instruction.
 
-**Form factor** is deferred until the number of finding clusters is known.
-opencode already loads superpowers as a git plugin, so distribution is solved
-either way.
+### 10.0 Form factor: a plugin containing a model-pinned agent
+
+Verified against opencode 1.18.23: agent definitions carry `model`, `tools`,
+`permission` and `prompt`. A `SKILL.md` carries none of those - it is
+instructions only.
+
+**This rules out shipping as a bare skill.** A skill loads into whatever model
+currently drives the session, so invoking it from a DeepSeek session has DeepSeek
+review its own output - exactly the blind-spot failure section 4 bucket 2 names.
+The failure is silent: no error, just a weaker review. Packaging the reviewer as
+a skill would make its single most important property depend on the user
+remembering to switch models first.
+
+Three layers, each load-bearing:
+
+| Layer | Carries | Why it is needed |
+|---|---|---|
+| **Agent** | `model: anthropic/claude-opus-5`, read-only `tools`/`permission` | Makes the model pin structural rather than conventional. A reviewer also has no business editing |
+| **Skill** | Hazard instructions plus provenance | The long, frequently regenerated part; isolating it keeps regeneration diffs clean, and `SKILL.md` is the portable format if section 16.1 is ever revisited |
+| **Plugin** | Agent, skill, and executable checks | The only layer that can register real tools |
+
+The plugin layer is what gives **bucket 2 somewhere to go.** Section 4 routes
+findings where both arms fail to a mechanical check rather than a model
+instruction. Markdown cannot express an AST check; a plugin can register one as a
+tool. Without this layer those findings are simply discarded.
+
+The plugin also gives the published artifact a one-line install rather than
+instructions to copy files into directories.
+
+**Cost:** a plugin is JavaScript and carries maintenance that markdown does not.
+Accepted, because the alternative has a silent correctness failure.
+
+**Degrades gracefully:** if bucket 2 is empty after phase 1, the plugin reduces
+to an agent-plus-skill installer - thinner, still correct. A `/deepseek-review`
+command is sugar over `@deepseek-review` and is cut if it does not earn itself.
 
 **If the differential is thin, the skill is thin.** We publish the null result
 and do not pad it with generic advice.
