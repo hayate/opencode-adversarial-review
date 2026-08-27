@@ -1,5 +1,8 @@
 reports/
+runs/
 __pycache__/
 *.pyc
 .venv/
-runs/
+.pytest_cache/
+containers/digests*
+*.egg-info/

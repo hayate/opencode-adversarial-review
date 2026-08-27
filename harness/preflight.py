@@ -1,0 +1,69 @@
+"""Preflight checks - run before anything spends money or starts a container."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import stat
+import subprocess
+from pathlib import Path
+
+REQUIRED_BINARIES = ("podman", "opencode")
+REQUIRED_CREDENTIALS = ("DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY")
+
+DEFAULT_ENV_FILE = Path.home() / ".config" / "opencode-deepseek-review" / "env"
+
+
+def load_eval_env(env_file: Path | None = None) -> dict[str, str]:
+    """Read the eval-only credentials written by ~/maya/odr-keys.sh.
+
+    Credentials live outside the repo so they cannot be committed, and are
+    read from a file rather than the ambient environment so a run records
+    exactly which keys it used.
+    """
+    path = Path(env_file) if env_file is not None else DEFAULT_ENV_FILE
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
+def preflight(
+    env: dict[str, str] | None = None, env_file: Path | None = None
+) -> list[str]:
+    """Return a list of problems. Empty means ready to run."""
+    problems: list[str] = []
+
+    for binary in REQUIRED_BINARIES:
+        if shutil.which(binary) is None:
+            problems.append(f"{binary} not found on PATH")
+
+    if shutil.which("podman") is not None:
+        result = subprocess.run(
+            ["podman", "info", "--format", "{{.Host.Security.Rootless}}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip() != "true":
+            problems.append("podman is not running rootless")
+
+    path = Path(env_file) if env_file is not None else DEFAULT_ENV_FILE
+    if path.exists():
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode & 0o077:
+            problems.append(
+                f"{path} has permission {mode:04o}; secrets must be 0600"
+            )
+
+    credentials = env if env is not None else {**load_eval_env(env_file), **os.environ}
+    for key in REQUIRED_CREDENTIALS:
+        if not credentials.get(key):
+            problems.append(f"{key} is not set (run: bash ~/maya/odr-keys.sh)")
+
+    return problems
