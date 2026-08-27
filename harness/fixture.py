@@ -33,6 +33,7 @@ class Fixture:
     task_brief: str
     hazards: list[dict]
     manifest: set[str]
+    scope: list[str]
 
     @property
     def repo_dir(self) -> Path:
@@ -59,6 +60,7 @@ def load_fixture(path: Path) -> Fixture:
         task_brief=(path / "task.md").read_text(),
         hazards=data.get("hazards") or [],
         manifest=manifest,
+        scope=data.get("scope") or [],
     )
 
 

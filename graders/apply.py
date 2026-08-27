@@ -59,14 +59,24 @@ _GRADING_ENV = {
 }
 
 
+# Who made this ungradable. The distinction matters because eval.py resamples
+# harness faults but must NOT silently resample the model's own wreckage: a
+# tree so broken pytest cannot collect it is a tree where the hazard test would
+# have failed, so retrying quietly deletes the worst runs and refills the
+# denominator to a full-looking n.
+HARNESS = "harness"
+MODEL_OUTPUT = "model_output"
+
+
 @dataclass(frozen=True)
 class GradeResult:
     hazard_results: dict[str, str]  # hazard id -> "pass" | "fail" | "invalid"
     error: str | None
+    cause: str | None = None
 
 
-def _all_invalid(fixture: Fixture, error: str) -> GradeResult:
-    return GradeResult({h["id"]: "invalid" for h in fixture.hazards}, error)
+def _all_invalid(fixture: Fixture, error: str, cause: str) -> GradeResult:
+    return GradeResult({h["id"]: "invalid" for h in fixture.hazards}, error, cause)
 
 
 def _unsafe_reason(tree: Path) -> str | None:
@@ -102,37 +112,37 @@ def _strip_bytecode(tree: Path) -> int:
     return removed
 
 
-def _stage(fixture: Fixture, tree: Path, work: Path) -> str | None:
-    """Build work/{subject,_grader}. Returns an error string, or None on success."""
+def _stage(fixture: Fixture, tree: Path, work: Path) -> tuple[str, str] | None:
+    """Build work/{subject,_grader}. Returns (error, cause), or None on success."""
     work.mkdir(parents=True, exist_ok=True)
     subject = work / SUBJECT_DIR
     try:
         shutil.copytree(tree, subject, symlinks=True)
     except OSError as exc:
-        return f"could not stage the post-run tree: {exc}"
+        return f"could not stage the post-run tree: {exc}", HARNESS
 
     unsafe = _unsafe_reason(subject)
     if unsafe:
-        return unsafe
+        return unsafe, MODEL_OUTPUT
 
     # lexists, not exists: exists() follows links, so a dangling _grader
     # symlink would slip past. Kept even though the subject now lives in its
     # own directory and can no longer collide with the mounted grader.
     if os.path.lexists(subject / GRADER_MOUNT):
-        return f"{GRADER_MOUNT} is reserved and was present in the tree"
+        return f"{GRADER_MOUNT} is reserved and was present in the tree", MODEL_OUTPUT
 
     _strip_bytecode(subject)
 
     try:
         shutil.copytree(fixture.root / "grader", work / GRADER_MOUNT, symlinks=True)
     except OSError as exc:
-        return f"could not stage the grader: {exc}"
+        return f"could not stage the grader: {exc}", HARNESS
     if not (work / GRADER_MOUNT / GRADER_INI).is_file():
         return (
             f"{fixture.id}: grader is missing {GRADER_INI}. The grader must own "
             f"its pytest config; inheriting the subject tree's would hand the "
             f"model control of its own grading."
-        )
+        ), HARNESS
     return None
 
 
@@ -148,9 +158,9 @@ def validate_hazard_mapping(fixture: Fixture) -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp) / "w"
-        staging_error = _stage(fixture, fixture.known_good_dir, work)
-        if staging_error:
-            raise FixtureViolation(f"{fixture.id}: {staging_error}")
+        staged = _stage(fixture, fixture.known_good_dir, work)
+        if staged:
+            raise FixtureViolation(f"{fixture.id}: {staged[0]}")
         result = run_in_sandbox(
             GRADING_IMAGE,
             work,
@@ -208,9 +218,9 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
         out = Path(tmp) / "out"
         out.mkdir()
 
-        staging_error = _stage(fixture, tree, work)
-        if staging_error:
-            return _all_invalid(fixture, staging_error)
+        staged = _stage(fixture, tree, work)
+        if staged:
+            return _all_invalid(fixture, staged[0], staged[1])
 
         result = run_in_sandbox(
             GRADING_IMAGE,
@@ -225,21 +235,30 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
 
         report_path = out / "report.json"
         if result.timed_out:
-            return _all_invalid(fixture, "grader timed out")
+            # The grader itself is fixed and fast; a timeout here is model code
+            # hanging on import or at module scope.
+            return _all_invalid(fixture, "grader timed out", MODEL_OUTPUT)
         if not report_path.exists():
             return _all_invalid(
-                fixture, f"grader produced no report: {result.stderr[-800:]}"
+                fixture, f"grader produced no report: {result.stderr[-800:]}", HARNESS
             )
         try:
             report = json.loads(report_path.read_text())
         except json.JSONDecodeError as exc:
-            return _all_invalid(fixture, f"grader report is not valid JSON: {exc}")
+            return _all_invalid(
+                fixture, f"grader report is not valid JSON: {exc}", HARNESS
+            )
 
     by_nodeid = {t["nodeid"]: t for t in report.get("tests", [])}
     results: dict[str, str] = {}
+    missing_nodeids = False
     for hazard in fixture.hazards:
         tests = [by_nodeid.get(nodeid) for nodeid in hazard.get("tests") or []]
         if not tests or any(t is None for t in tests):
+            # The grading run itself succeeded, so a declared test that did not
+            # report is a collection failure caused by the tree under test -
+            # most often an import the model broke.
+            missing_nodeids = True
             results[hazard["id"]] = "invalid"
             continue
         verdicts = [_classify(t) for t in tests]
@@ -249,4 +268,5 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
             results[hazard["id"]] = "pass"
         else:
             results[hazard["id"]] = "fail"
-    return GradeResult(results, None)
+    cause = MODEL_OUTPUT if missing_nodeids else None
+    return GradeResult(results, None, cause)

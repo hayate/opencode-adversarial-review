@@ -1,3 +1,13 @@
+# Paths the ticket puts in bounds, beyond the hazards' own call_sites.
+#
+# This lived in eval.py as a hardcoded `notifications/services.py` - THIS
+# fixture's target module, baked into fixture-generic code. On fixture #2 that
+# silently whitelisted a path which does not exist and omitted the real one,
+# so every legitimate edit landed in out_of_scope_paths.
+scope:
+  - tests
+  - notifications/services.py
+
 hazards:
 # kind: achievement = only passes if the task was actually done.
 #       guard       = passes trivially when nothing was done; discriminates
