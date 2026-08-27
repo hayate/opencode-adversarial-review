@@ -46,7 +46,7 @@ SEARCH_COMMANDS = {"grep", "rg", "ag", "ack"}
 
 _SEGMENT = re.compile(r"\s*(?:\|\||&&|;|\|)\s*")
 _ENV_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_REDIRECT = re.compile(r">>?\s*([^\s;|&>]+)")
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 @dataclass(frozen=True)
@@ -92,8 +92,42 @@ def _normalise(path: str) -> str:
         return pure.as_posix().lstrip("/")
 
 
+def _strip_heredocs(command: str) -> str:
+    """Drop heredoc BODIES before the command is read as shell syntax.
+
+    A heredoc body is input DATA - a throwaway Python script, a JSON blob - and
+    parsing it as shell read `if count > 2:` as a redirect and `a | b` as a
+    segment boundary. Reaching for `python - <<PY` rather than an edit tool is a
+    workflow habit, and habits differ between models, so charging one for it is
+    the manufactured-differential class this module already carries two
+    comments about.
+    """
+    kept: list[str] = []
+    rest = command
+    while True:
+        match = _HEREDOC.search(rest)
+        if not match:
+            kept.append(rest)
+            return "".join(kept)
+        kept.append(rest[: match.start()])
+        marker = match.group(2)
+        # The operator itself is dropped with the body; what follows it on the
+        # same line is still shell and is kept.
+        line, _, body = rest[match.end():].partition("\n")
+        kept.append(line)
+        for index, text in enumerate(body.split("\n")):
+            # `<<-` permits a tab-indented terminator.
+            if text.strip() == marker:
+                rest = "\n".join(body.split("\n")[index + 1:])
+                break
+        else:
+            return "".join(kept)
+
+
 def _segments(command: str) -> list[str]:
-    return [s.strip() for s in _SEGMENT.split(command) if s.strip()]
+    return [
+        s.strip() for s in _SEGMENT.split(_strip_heredocs(command)) if s.strip()
+    ]
 
 
 def _tokens(segment: str) -> list[str]:
@@ -171,6 +205,36 @@ def _bash_reads(segment: str) -> list[str]:
     return []
 
 
+def _redirect_targets(segment: str) -> list[str]:
+    """Redirect destinations, blind to any `>` that never left a string.
+
+    The previous regex ran over raw text, so `python -c "ops = [\'<\', \'>\']"`
+    recorded an edit to `\',` - visible in the committed py-callsite-01 report.
+    shlex with punctuation_chars keeps a quoted string as ONE token and emits
+    `>` and `>>` as operators of their own, so only an operator in shell
+    position can name a target.
+
+    On unbalanced quotes it reports NOTHING rather than falling back to the
+    regex. That under-reports edits, which pushes first_edit later and makes
+    read_before_edit more generous - the direction that cannot invent the
+    "did not look" reading this module warns about.
+    """
+    try:
+        lexer = shlex.shlex(segment, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        # Default commenters would silently truncate at a `#`, taking any
+        # redirect after it with them.
+        lexer.commenters = ""
+        toks = list(lexer)
+    except ValueError:
+        return []
+    return [
+        toks[i + 1]
+        for i, tok in enumerate(toks)
+        if tok in {">", ">>"} and i + 1 < len(toks)
+    ]
+
+
 def _bash_edits(segment: str) -> list[str]:
     toks = _tokens(segment)
     out: list[str] = []
@@ -187,7 +251,7 @@ def _bash_edits(segment: str) -> list[str]:
             out.append(plain[-1])
         elif head in {"touch", "truncate", "patch"}:
             out += plain
-    for target in _REDIRECT.findall(segment):
+    for target in _redirect_targets(segment):
         # A discarded or external destination is not an edit to the subject.
         # Counting /dev/null put a read and an "edit" at the same tool-call
         # index, so the ordering check reported the file was never read before

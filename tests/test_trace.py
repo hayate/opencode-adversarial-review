@@ -281,3 +281,69 @@ def test_read_before_edit_is_false_when_the_census_came_after_the_first_edit():
     assert set(obs["read_paths"]) >= sites, (
         "the census IS visible in read_paths; only the ordering signal is False"
     )
+
+
+# --- A `>` inside quoted text or a heredoc body is not a redirect ---
+
+
+@pytest.mark.parametrize("command", [
+    # Reproduced from the committed py-callsite-01 report, where attempt 3
+    # recorded edited_paths ["',", "',", ...]: the capture group ran from the
+    # `>` of a quoted operator list to the following comma.
+    """python -c "ops = ['<', '>', '=']" """,
+    'grep -rn "recipients -> tz" notifications/',
+    'echo "digest > threshold"',
+    # Heredoc bodies are input DATA, not shell syntax. Writing a throwaway
+    # script this way is a workflow habit, and habits differ between models.
+    "python - <<'EOF'\nif count > 2:\n    pass\nEOF",
+    'python - <<PY\nprint("a > b")\nPY',
+])
+def test_a_redirect_inside_quotes_or_a_heredoc_is_not_an_edit(command):
+    """_REDIRECT was applied to raw segment text with no quote awareness, so
+    any `>` in a string literal became a phantom edit.
+
+    This is the /dev/null artifact through a different door, and it lands the
+    same way: a phantom edit lowers first_edit, which shrinks reads_before_edit
+    and can flip read_before_edit to False. Models differ in how often they
+    reach for `python -c` and heredocs, so scoring that as diligence
+    manufactures a differential out of workflow habit - the confound class this
+    module already carries two comments about.
+    """
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+        must_read={"notifications/views.py"},
+    )
+    assert obs["edited_paths"] == [], command
+
+
+@pytest.mark.parametrize("command,target", [
+    ("echo x > notifications/views.py", "notifications/views.py"),
+    ("echo x >notifications/views.py", "notifications/views.py"),
+    ("echo x >> notifications/views.py", "notifications/views.py"),
+    ("echo x >>notifications/views.py", "notifications/views.py"),
+    ("pytest -q 2> notifications/views.py", "notifications/views.py"),
+    ("cat a.py > /workspace/notifications/views.py", "notifications/views.py"),
+])
+def test_a_real_redirect_into_the_subject_is_still_an_edit(command, target):
+    """Quote awareness must not cost the detection it was added for."""
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert target in obs["edited_paths"], command
+
+
+def test_a_quoted_redirect_does_not_disturb_the_read_ordering(command=None):
+    """The reason the phantom matters, stated as behaviour rather than a path
+    list: a quoted `>` in the FIRST bash call sets first_edit to 0, so every
+    later read counts as read-after-edit and a model that looked at everything
+    scores False."""
+    obs = observations(
+        _session(
+            _bash("""python -c "ops = ['<', '>', '=']" """),
+            _tool("read", input={"filePath": "/workspace/notifications/views.py"}),
+            _tool("edit", input={"filePath": "/workspace/notifications/views.py"}),
+        ),
+        changes=NO_CHANGES, allowed_scope=set(),
+        must_read={"notifications/views.py"},
+    )
+    assert obs["read_before_edit"] is True
