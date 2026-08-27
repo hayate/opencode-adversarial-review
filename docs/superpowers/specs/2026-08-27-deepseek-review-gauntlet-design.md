@@ -173,6 +173,47 @@ without appearing anywhere in the record.
 | `OPENCODE_CONFIG_CONTENT` | Canonical config injected, no file on disk |
 | `OPENCODE_AUTH_CONTENT` | Arm credential injected, no `auth.json` |
 
+### 6.0 Verified: containerisation is the sterility mechanism, not just containment
+
+Revision 2 assumed `OPENCODE_CONFIG_CONTENT` would supply "a canonical config,
+no file on disk". **That is wrong**, established empirically against opencode
+1.18.23 on 2026-08-27 by A/B-ing `opencode debug config`:
+
+| Test | Result |
+|---|---|
+| `--pure` plus the disable switches | **Works** for plugins and skills: superpowers' `skills.paths` and the plugin-injected agents disappear |
+| `OPENCODE_DISABLE_PROJECT_CONFIG` | Disables *project* config only. The entire global `~/.config/opencode/opencode.jsonc` survives - providers, model pins, plugin list |
+| `OPENCODE_CONFIG_CONTENT` | **Merges, does not replace.** An injected minimal config set `model` and `enabled_providers`, but the host's `provider.anthropic` block and plugin array came through anyway |
+| Throwaway `HOME` + `XDG_CONFIG_HOME` | **Clean slate:** `model: null`, `enabled_providers: null`, `plugin: []` |
+
+The consequence is architectural. **A sterile run is not achievable by
+environment variables on the host at all.** The only mechanism that produces a
+clean configuration is an isolated `HOME`, which is precisely what a container
+supplies. Running the agent as a host subprocess would silently execute *both
+arms* against the operator's personal global config - their providers, their
+model pins - and produce numbers that look entirely normal.
+
+Containerisation therefore serves two independent purposes: containment
+(section 12) and configuration sterility. Neither is optional, and the second is
+the one that silently corrupts results rather than announcing itself.
+
+**The verified recipe, all inside the agent container:**
+
+1. Isolated `HOME` and `XDG_CONFIG_HOME` on tmpfs, outside `/workspace`.
+2. `OPENCODE_CONFIG_CONTENT` carrying the canonical config - now correct, because
+   with a clean `HOME` there is nothing left to merge with.
+3. `OPENCODE_AUTH_CONTENT` carrying only the arm's credential.
+4. The disable switches above.
+5. Verification is **deterministic, not behavioural**: assert against
+   `opencode debug config`, `debug skill`, and `debug agent <name>` that no host
+   configuration, skill path, or agent survived. Positive controls with isolation
+   off prove each canary is observable. A stochastic canary prompt is not a valid
+   isolation test and is not used.
+
+Note that the resolved `plugin` array still *lists* declared plugins even when
+they are not loaded. Isolation must be verified by what actually loaded - agents
+and `skills.paths` - never by that key.
+
 Additionally pinned per run: an immutable OCI image digest, the opencode binary
 digest, `--agent` explicitly named, an allowlisted environment rather than
 inherited host variables, and an exact model id rather than a moving alias.
@@ -486,7 +527,12 @@ limits via cgroups. `no-new-privileges`, dropped capabilities, seccomp, read-onl
 root filesystem with an isolated writable work volume, no host sockets.
 
 **Grading sandbox:** no network at all, no provider credential, same hardening.
-This is where untrusted model-authored code executes.
+This is where untrusted model-authored code executes. Host-side preparation of a
+post-run tree must never follow model-authored symlinks: a model-created link to
+a host path would be dereferenced by the host before the sandbox ever starts.
+
+**The agent sandbox is also the sterility mechanism** - see section 6.0. It is
+not an optional hardening layer that a host subprocess could substitute for.
 
 **What this covers:** shell damage outside the copied worktree, run-to-run
 persistence, container-root to host-root escalation by normal means, runaway
