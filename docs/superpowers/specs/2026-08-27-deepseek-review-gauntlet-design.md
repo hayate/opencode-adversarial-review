@@ -534,6 +534,29 @@ a host path would be dereferenced by the host before the sandbox ever starts.
 **The agent sandbox is also the sterility mechanism** - see section 6.0. It is
 not an optional hardening layer that a host subprocess could substitute for.
 
+### 12.1 Slice-scoped egress exception (expires before phase 1)
+
+The egress proxy is **not** implemented for the vertical slice. This is a
+recorded exception, approved 2026-08-27, not a silent violation.
+
+**What is deferred:** destination allowlisting. The agent container has general
+network access while a provider credential is present, and it runs
+model-authored shell commands.
+
+**Mandatory compensating controls while the exception stands:**
+
+1. Credentials are **fresh, eval-only, and spend-capped**. Never the operator's
+   primary keys.
+2. Link-local, metadata, and host-local routes are blocked at the container.
+3. Runs are **attended**. No unattended multi-run session under this exception.
+4. The fixture task is a benign refactor; no fixture may contain content
+   designed to induce network activity.
+
+**Expiry:** the exception covers the vertical slice only. The proxy must exist
+before phase 1's 12-fixture run, and before any unattended session, whichever
+comes first. Residual risk accepted: a model-authored command could reach an
+arbitrary destination during an attended slice run.
+
 **What this covers:** shell damage outside the copied worktree, run-to-run
 persistence, container-root to host-root escalation by normal means, runaway
 resource use, unbounded provider spend.

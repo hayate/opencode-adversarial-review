@@ -134,13 +134,113 @@ git commit -m "feat: project bootstrap and preflight checks"
 
 ---
 
-## Task 1: Capture the real opencode contracts
+## Task 1: Build and pin both container images
+
+**Files:**
+- Create: `containers/agent.Containerfile`, `containers/grading.Containerfile`, `containers/build.sh`
+- Test: `tests/test_images.py`
+
+**Interfaces:**
+- Produces: `localhost/odr-agent@sha256:...` and `localhost/odr-grading@sha256:...`, digests written to `containers/digests.json`.
+
+- [ ] **Step 1: Write the grading image**
+
+Note: **not alpine.** Busybox `find` lacks `-printf`, which the manifest check needs.
+
+```dockerfile
+# containers/grading.Containerfile
+# Base pinned by digest: a floating tag means two runs of the same commit
+# can use different tools while reporting the same configuration.
+FROM docker.io/library/python:3.13-slim@sha256:PIN_ME
+RUN pip install --no-cache-dir \
+      "django>=5.0" "djangorestframework>=3.15" \
+      "pytest>=8.0" "pytest-django>=4.8" "pytest-json-report>=1.5" "tzdata"
+WORKDIR /workspace
+```
+
+- [ ] **Step 2: Write the agent image**
+
+```dockerfile
+# containers/agent.Containerfile
+FROM docker.io/library/python:3.13-slim@sha256:PIN_ME
+ARG OPENCODE_VERSION=1.18.23
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ARG OPENCODE_SHA256
+# Fetch, verify the checksum, THEN install. A mutable installer URL is not a pin.
+RUN curl -fsSL -o /tmp/oc-install.sh https://opencode.ai/install \
+    && echo "${OPENCODE_SHA256}  /tmp/oc-install.sh" | sha256sum -c - \
+    && VERSION=${OPENCODE_VERSION} bash /tmp/oc-install.sh
+ENV PATH="/root/.opencode/bin:${PATH}"
+RUN pip install --no-cache-dir "django>=5.0" "djangorestframework>=3.15" "pytest>=8.0" "pytest-django>=4.8" "tzdata"
+WORKDIR /workspace
+```
+
+- [ ] **Step 3: Write `build.sh` recording digests**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+for img in agent grading; do
+  podman build -t "localhost/odr-$img:latest" -f "$img.Containerfile" .
+done
+# Emit the machine-readable file the interface promises, and record the
+# opencode binary digest too - later tasks run BY DIGEST, never by :latest.
+podman image inspect localhost/odr-agent:latest localhost/odr-grading:latest \
+  --format '{"{{.RepoTags}}": "{{.Id}}"}' | jq -s add > digests.json
+podman run --rm localhost/odr-agent:latest \
+  sh -c 'sha256sum $(command -v opencode)' >> digests.json.binary
+cat digests.json
+```
+
+- [ ] **Step 4: Write the test**
+
+```python
+# tests/test_images.py
+from harness.sandbox import run_in_sandbox
+from pathlib import Path
+
+def test_agent_image_has_opencode(tmp_path):
+    r = run_in_sandbox("localhost/odr-agent:latest", tmp_path,
+                       ["opencode", "--version"], network="none")
+    assert r.exit_code == 0 and r.stdout.strip()
+
+def test_grading_image_can_import_django(tmp_path):
+    r = run_in_sandbox("localhost/odr-grading:latest", tmp_path,
+                       ["python", "-c", "import django, rest_framework, pytest_django"],
+                       network="none")
+    assert r.exit_code == 0
+
+def test_grading_find_supports_printf(tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+    r = run_in_sandbox("localhost/odr-grading:latest", tmp_path,
+                       ["find", ".", "-type", "f", "-printf", "%P\\n"], network="none")
+    assert r.stdout.strip() == "a.txt"
+```
+
+- [ ] **Step 5: Build, test, commit**
+
+```bash
+bash containers/build.sh
+uv run pytest tests/test_images.py -v
+git add containers/ tests/test_images.py
+git commit -m "feat: pinned agent and grading images"
+```
+
+---
+
+## Task 2: Capture the real opencode contracts
+
+**Depends on Task 1 - capture must happen inside the pinned agent image.**
+A host-captured contract describes a different runtime than the one the eval
+uses. Revision 2 got this wrong.
 
 **This task must complete before any parser is written.** Revision 1's trace parser was written against an invented schema; this task replaces guessing with recording.
 
 **Files:**
 - Create: `contracts/README.md`, `contracts/capture.sh`
-- Create (recorded, committed): `contracts/run-events.ndjson`, `contracts/session-export.json`, `contracts/debug-config-sterile.json`, `contracts/debug-config-host.json`
+- Create (recorded, committed): `contracts/run-events.ndjson`, `contracts/session-export.json`, `contracts/debug-config-sterile.json`, `contracts/debug-config-seeded.json`, `contracts/debug-config-host.json`
 - Test: `tests/test_contracts.py`
 
 **Interfaces:**
@@ -152,31 +252,52 @@ Use the cheapest model on a trivial task. The goal is schema, not behaviour.
 
 ```bash
 #!/usr/bin/env bash
-# contracts/capture.sh - record real opencode outputs as schema fixtures.
+# contracts/capture.sh - record real opencode outputs from INSIDE the pinned
+# agent image, in one container lifecycle. Never captures the operator's
+# personal config: the positive control uses a synthetic seeded config.
 set -euo pipefail
 OUT="$(cd "$(dirname "$0")" && pwd)"
-WORK=$(mktemp -d)
-HOME_DIR="$WORK/home"
-mkdir -p "$WORK/repo" "$HOME_DIR"
+IMAGE="${ODR_AGENT_IMAGE:?set to the digest from containers/digests.json}"
+WORK=$(mktemp -d); mkdir -p "$WORK/repo" "$OUT"
 printf 'def add(a, b):\n    return a + b\n' > "$WORK/repo/calc.py"
 
-# Sterile vs host resolved config, for the isolation assertions in Task 6.
-env HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR/.config" PATH="$PATH" \
-    OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_DEFAULT_PLUGINS=1 \
-    opencode debug config --pure > "$OUT/debug-config-sterile.json"
-opencode debug config > "$OUT/debug-config-host.json"
+# Synthetic seeded config: the POSITIVE CONTROL. Proves the sterile assertion
+# can fail. Andrea's real config is never read and never committed.
+cat > "$WORK/seeded-config.json" <<'JSON'
+{"provider":{"canary-provider":{"options":{"baseURL":"https://canary.invalid"}}}}
+JSON
 
-# One cheap real run, capturing the event stream verbatim.
-cd "$WORK/repo"
-env HOME="$HOME_DIR" XDG_CONFIG_HOME="$HOME_DIR/.config" PATH="$PATH" \
-    OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_DEFAULT_PLUGINS=1 \
+podman run --rm --network=bridge \
+  -v "$WORK/repo:/workspace:rw,Z" -v "$WORK:/seed:ro,Z" -w /workspace \
+  -e DEEPSEEK_API_KEY -e OPENCODE_DISABLE_PROJECT_CONFIG=1 \
+  -e OPENCODE_DISABLE_DEFAULT_PLUGINS=1 -e HOME=/tmp/h -e XDG_CONFIG_HOME=/tmp/h/.config \
+  -v "$OUT:/out:rw,Z" "$IMAGE" sh -euxc '
+    mkdir -p /tmp/h/.config
+    opencode debug config --pure > /out/debug-config-sterile.json
+    OPENCODE_CONFIG_CONTENT=$(cat /seed/seeded-config.json) \
+      opencode debug config > /out/debug-config-seeded.json
+    opencode debug skill > /out/debug-skill.json 2>&1 || true
     opencode run --pure --format json -m deepseek/deepseek-v4-flash \
-    "Add a subtract function to calc.py and run python -c 'import calc'." \
-    > "$OUT/run-events.ndjson"
-
-SESSION=$(grep -om1 '"sessionID":"[^"]*"' "$OUT/run-events.ndjson" | cut -d'"' -f4)
-opencode export "$SESSION" > "$OUT/session-export.json"
-echo "captured session $SESSION"
+      "Add a subtract function to calc.py and run python -c \"import calc\"." \
+      > /out/run-events.ndjson
+    # Schema-aware extraction, not a formatting-dependent regex.
+    SESSION=$(python3 -c "
+import json,sys
+for line in open(\"/out/run-events.ndjson\"):
+    line=line.strip()
+    if not line: continue
+    try: obj=json.loads(line)
+    except json.JSONDecodeError: continue
+    for key in (\"sessionID\",\"sessionId\",\"session_id\"):
+        if key in obj: print(obj[key]); sys.exit(0)
+        if isinstance(obj.get(\"info\"),dict) and key in obj[\"info\"]:
+            print(obj[\"info\"][key]); sys.exit(0)
+sys.exit(\"no session id found - inspect run-events.ndjson by hand\")
+")
+    # Same container, same HOME: export cannot find the session otherwise.
+    opencode export "$SESSION" > /out/session-export.json
+    echo "captured session $SESSION"
+  '
 ```
 
 - [ ] **Step 2: Run it**
@@ -221,10 +342,13 @@ def test_sterile_config_has_no_host_provider_block():
     sterile = json.loads((C / "debug-config-sterile.json").read_text())
     assert not (sterile.get("provider") or {}), "isolation did not strip host providers"
 
-def test_host_config_does_have_a_provider_block():
-    """Positive control: proves the previous assertion can fail."""
-    host = json.loads((C / "debug-config-host.json").read_text())
-    assert host.get("provider"), "positive control failed - check the capture"
+def test_seeded_config_does_have_a_provider_block():
+    """Positive control: proves the sterile assertion above can actually fail.
+    Uses a SYNTHETIC seeded config - never the operator's real one, which
+    would leak provider settings into a public repo."""
+    seeded = json.loads((C / "debug-config-seeded.json").read_text())
+    assert "canary-provider" in (seeded.get("provider") or {}), \
+        "positive control failed - the sterile assertion proves nothing"
 ```
 
 `_model_id_of` is written in Step 3 once the real shape is known.
@@ -234,91 +358,6 @@ def test_host_config_does_have_a_provider_block():
 ```bash
 git add contracts/ tests/test_contracts.py
 git commit -m "feat: capture real opencode contracts as committed schema fixtures"
-```
-
----
-
-## Task 2: Build and pin both container images
-
-**Files:**
-- Create: `containers/agent.Containerfile`, `containers/grading.Containerfile`, `containers/build.sh`
-- Test: `tests/test_images.py`
-
-**Interfaces:**
-- Produces: `localhost/odr-agent@sha256:...` and `localhost/odr-grading@sha256:...`, digests written to `containers/digests.json`.
-
-- [ ] **Step 1: Write the grading image**
-
-Note: **not alpine.** Busybox `find` lacks `-printf`, which the manifest check needs.
-
-```dockerfile
-# containers/grading.Containerfile
-FROM docker.io/library/python:3.13-slim
-RUN pip install --no-cache-dir \
-      "django>=5.0" "djangorestframework>=3.15" \
-      "pytest>=8.0" "pytest-django>=4.8" "pytest-json-report>=1.5" "tzdata"
-WORKDIR /workspace
-```
-
-- [ ] **Step 2: Write the agent image**
-
-```dockerfile
-# containers/agent.Containerfile
-FROM docker.io/library/python:3.13-slim
-ARG OPENCODE_VERSION=1.18.23
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://opencode.ai/install | VERSION=${OPENCODE_VERSION} bash
-ENV PATH="/root/.opencode/bin:${PATH}"
-RUN pip install --no-cache-dir "django>=5.0" "djangorestframework>=3.15" "pytest>=8.0" "pytest-django>=4.8" "tzdata"
-WORKDIR /workspace
-```
-
-- [ ] **Step 3: Write `build.sh` recording digests**
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-for img in agent grading; do
-  podman build -t "localhost/odr-$img:latest" -f "$img.Containerfile" .
-done
-podman image inspect localhost/odr-agent:latest localhost/odr-grading:latest \
-  --format '{{.RepoTags}} {{.Id}}' | tee digests.txt
-```
-
-- [ ] **Step 4: Write the test**
-
-```python
-# tests/test_images.py
-from harness.sandbox import run_in_sandbox
-from pathlib import Path
-
-def test_agent_image_has_opencode(tmp_path):
-    r = run_in_sandbox("localhost/odr-agent:latest", tmp_path,
-                       ["opencode", "--version"], network="none")
-    assert r.exit_code == 0 and r.stdout.strip()
-
-def test_grading_image_can_import_django(tmp_path):
-    r = run_in_sandbox("localhost/odr-grading:latest", tmp_path,
-                       ["python", "-c", "import django, rest_framework, pytest_django"],
-                       network="none")
-    assert r.exit_code == 0
-
-def test_grading_find_supports_printf(tmp_path):
-    (tmp_path / "a.txt").write_text("x")
-    r = run_in_sandbox("localhost/odr-grading:latest", tmp_path,
-                       ["find", ".", "-type", "f", "-printf", "%P\\n"], network="none")
-    assert r.stdout.strip() == "a.txt"
-```
-
-- [ ] **Step 5: Build, test, commit**
-
-```bash
-bash containers/build.sh
-uv run pytest tests/test_images.py -v
-git add containers/ tests/test_images.py
-git commit -m "feat: pinned agent and grading images"
 ```
 
 ---
@@ -522,6 +561,11 @@ class Fixture:
     @property
     def repo_dir(self) -> Path:
         return self.root / "repo"
+
+    @property
+    def known_good_dir(self) -> Path:
+        """Reference tree used to collect grader tests before any paid run."""
+        return self.root / "known_good" / "explicit_all"
 
 def load_fixture(path: Path) -> Fixture:
     path = Path(path).resolve()
@@ -741,7 +785,7 @@ def test_missing_grader_test_is_invalid_not_fail(tmp_path):
 ```python
 # graders/apply.py
 from __future__ import annotations
-import json, shutil, tempfile
+import json, os, shutil, tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from harness.fixture import Fixture, FixtureViolation
@@ -759,13 +803,36 @@ def validate_hazard_mapping(fixture: Fixture) -> None:
         tests = hazard.get("tests") or []
         if not tests:
             raise FixtureViolation(f"{hazard['id']} declares no grader tests")
-        for nodeid in tests:
-            rel = nodeid.split("::")[0].removeprefix("_grader/")
-            if not (fixture.root / "grader" / rel).exists():
-                raise FixtureViolation(f"{hazard['id']} names missing file {rel}")
+    # File existence is not enough: a misspelled class or function node id passes
+    # and only surfaces as "invalid" AFTER a paid run. Collect for real.
+    declared = {n for h in fixture.hazards for n in (h.get("tests") or [])}
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        shutil.copytree(fixture.known_good_dir, work, symlinks=True)
+        shutil.copytree(fixture.root / "grader", work / "_grader", symlinks=True)
+        result = run_in_sandbox(
+            GRADING_IMAGE, work,
+            ["python", "-m", "pytest", "_grader", "--collect-only", "-q",
+             "-p", "no:cacheprovider"],
+            network="none", timeout_s=120,
+        )
+        collected = {line.strip() for line in result.stdout.splitlines() if "::" in line}
+    missing = {n for n in declared if n not in collected}
+    if missing:
+        raise FixtureViolation(f"declared grader tests do not collect: {sorted(missing)}")
+
+def _reject_unsafe(tree: Path) -> str | None:
+    """Preserving model symlinks beats dereferencing them, but only as half the
+    fix: a preserved link still resolves INSIDE the grading container, where it
+    can target /out, /tmp, or _grader. Simplest sound policy is to reject."""
+    for entry in tree.rglob("*"):
+        if entry.is_symlink():
+            return f"model-authored symlink is not gradable: {entry}"
+        if entry.exists() and not (entry.is_file() or entry.is_dir()):
+            return f"model-authored special file is not gradable: {entry}"
+    return None
 
 def _safe_copy(src: Path, dest: Path) -> None:
-    """Never dereference model-authored symlinks on the host."""
     shutil.copytree(src, dest, symlinks=True)
 
 def grade(fixture: Fixture, tree: Path) -> GradeResult:
@@ -774,7 +841,12 @@ def grade(fixture: Fixture, tree: Path) -> GradeResult:
         out = Path(tmp) / "out"
         out.mkdir()
         _safe_copy(tree, work)
-        if (work / "_grader").exists():
+        unsafe = _reject_unsafe(work)
+        if unsafe:
+            return GradeResult({h["id"]: "invalid" for h in fixture.hazards}, unsafe)
+        # lexists, not exists: exists() follows links, so a dangling _grader
+        # symlink slips past and the copytree below then raises.
+        if os.path.lexists(work / "_grader"):
             return GradeResult(
                 {h["id"]: "invalid" for h in fixture.hazards},
                 "_grader is reserved and was present in the post-run tree",
@@ -796,13 +868,31 @@ def grade(fixture: Fixture, tree: Path) -> GradeResult:
             )
         report = json.loads(report_path.read_text())
 
-    by_nodeid = {t["nodeid"]: t["outcome"] for t in report.get("tests", [])}
+    by_nodeid = {t["nodeid"]: t for t in report.get("tests", [])}
+
+    def classify(test: dict) -> str:
+        """A hazard failure is an ASSERTION in the call phase. A setup or
+        teardown error is infrastructure and must never count against a model."""
+        for phase in ("setup", "teardown"):
+            if (test.get(phase) or {}).get("outcome") == "error":
+                return "invalid"
+        call = test.get("call") or {}
+        if call.get("outcome") == "passed":
+            return "pass"
+        if call.get("outcome") == "failed":
+            return "fail"
+        return "invalid"
+
     results: dict[str, str] = {}
     for hazard in fixture.hazards:
-        outcomes = [by_nodeid.get(nodeid) for nodeid in hazard["tests"]]
-        if any(o is None for o in outcomes):
+        tests = [by_nodeid.get(nodeid) for nodeid in hazard["tests"]]
+        if any(t is None for t in tests):
             results[hazard["id"]] = "invalid"
-        elif all(o == "passed" for o in outcomes):
+            continue
+        verdicts = [classify(t) for t in tests]
+        if "invalid" in verdicts:
+            results[hazard["id"]] = "invalid"
+        elif all(v == "pass" for v in verdicts):
             results[hazard["id"]] = "pass"
         else:
             results[hazard["id"]] = "fail"
@@ -861,7 +951,7 @@ def test_untracked_new_file_is_detected(tmp_path):
 ```python
 # harness/snapshot.py
 from __future__ import annotations
-import hashlib
+import hashlib, stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -871,15 +961,30 @@ class Changes:
     modified: set[str]
     deleted: set[str]
 
+CHUNK = 1024 * 1024
+
 def snapshot(tree: Path) -> dict[str, str]:
+    """Record kind, mode and content. Mode matters: a chmod +x is a real
+    mutation that a content-only digest silently misses. Files are streamed,
+    because a model-created large file must not exhaust harness memory."""
     tree = Path(tree)
     out: dict[str, str] = {}
     for path in sorted(tree.rglob("*")):
+        rel = path.relative_to(tree).as_posix()
+        info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
         if path.is_symlink():
-            out[path.relative_to(tree).as_posix()] = "symlink:" + str(path.readlink())
+            out[rel] = f"symlink:{mode:04o}:{path.readlink()}"
+        elif path.is_dir():
+            out[rel] = f"dir:{mode:04o}"
         elif path.is_file():
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            out[path.relative_to(tree).as_posix()] = digest
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                while chunk := handle.read(CHUNK):
+                    digest.update(chunk)
+            out[rel] = f"file:{mode:04o}:{digest.hexdigest()}"
+        else:
+            out[rel] = f"special:{mode:04o}"
     return out
 
 def diff_snapshots(before: dict[str, str], after: dict[str, str]) -> Changes:
@@ -977,29 +1082,74 @@ class RunResult:
     model_verified: bool
 
 def assert_sterile(image: str) -> None:
-    """Spec 6.0: verify isolation deterministically, with a positive control."""
+    """Spec 6.0. Verified deterministically, WITH a positive control.
+
+    Without the control, this assertion passing because the capture silently
+    broke is indistinguishable from it passing because isolation works.
+    """
     import tempfile
+    seeded = json.dumps({"provider": {"canary-provider": {"options": {}}}})
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "AGENTS.md").write_text("CANARY_PROJECT_INSTRUCTION\n")
         (work / "opencode.json").write_text('{"model":"canary/model"}')
-        sterile = run_in_sandbox(image, work, ["opencode", "debug", "config", "--pure"],
-                                 network="none", env=STERILE_ENV)
-        config = json.loads(sterile.stdout)
-        # NOTE: do NOT check config["plugin"]. Observed 2026-08-27: the resolved
-        # config still LISTS declared plugins even when they are not loaded.
-        # Isolation is verified by what actually loaded - providers, skills.paths,
-        # and injected agents - per spec section 6.0.
+
+        # POSITIVE CONTROL: isolation OFF, canary MUST be observable.
+        control = run_in_sandbox(
+            image, work, ["opencode", "debug", "config"], network="none",
+            env={"OPENCODE_CONFIG_CONTENT": seeded, "HOME": "/tmp/h",
+                 "XDG_CONFIG_HOME": "/tmp/h/.config"},
+        )
+        if control.exit_code != 0:
+            raise AssertionError(f"positive control did not run: {control.stderr[:500]}")
+        if "canary-provider" not in (json.loads(control.stdout).get("provider") or {}):
+            raise AssertionError(
+                "positive control failed: the canary is not observable even with "
+                "isolation off, so the sterile assertion below proves nothing"
+            )
+
+        # The real assertion: isolation ON, nothing may survive.
+        for argv, check in (
+            (["opencode", "debug", "config", "--pure"], "config"),
+            (["opencode", "debug", "skill"], "skill"),
+            (["opencode", "debug", "agent", "build"], "agent"),
+        ):
+            result = run_in_sandbox(image, work, argv, network="none", env=STERILE_ENV)
+            if result.exit_code != 0:
+                raise AssertionError(f"debug {check} failed: {result.stderr[:500]}")
+            blob = result.stdout
+            for canary in ("canary-provider", "canary/model", "CANARY_PROJECT_INSTRUCTION",
+                           "superpowers", "opencode-memory"):
+                if canary in blob:
+                    raise AssertionError(f"{canary!r} leaked into debug {check}")
+
+        config = json.loads(
+            run_in_sandbox(image, work, ["opencode", "debug", "config", "--pure"],
+                           network="none", env=STERILE_ENV).stdout
+        )
+        # NOTE: do NOT check config["plugin"]. Observed 2026-08-27: resolved config
+        # still LISTS declared plugins even when they are not loaded. Verify what
+        # loaded - providers, skills.paths, agents - never what was declared.
         if config.get("provider"):
             raise AssertionError(f"host providers leaked: {list(config['provider'])}")
         if (config.get("skills") or {}).get("paths"):
-            raise AssertionError(f"host skill paths leaked: {config['skills']['paths']}")
-        if config.get("model") == "canary/model":
-            raise AssertionError("project config leaked into the sterile run")
-        for agent_name in (config.get("agent") or {}):
-            if agent_name.startswith("opencode-memory"):
-                raise AssertionError(f"plugin-injected agent leaked: {agent_name}")
+            raise AssertionError(f"skill paths leaked: {config['skills']['paths']}")
 ```
+
+- [ ] **Step 2b: Enforce the turn cap**
+
+The cap is declared in spec §6.1 and was never implemented. Consume the NDJSON
+event stream, count assistant turns, and stop the container by name when the
+threshold is crossed; export the partial session and record `status="capped"`.
+A test must prove the container is actually stopped, not just that the client
+returned.
+
+- [ ] **Step 2c: Prove opencode works under the container's constraints**
+
+`HOME=/tmp/agent-home` sits on a 512m tmpfs under a read-only root. Create every
+HOME/XDG/cache/state directory explicitly and run a **full lifecycle** smoke test
+- run, then export - not merely `--version`. Measure tmpfs consumption; raise the
+size if a real session does not fit.
 
 - [ ] **Step 3: Confirm it passes, then commit**
 
@@ -1095,8 +1245,11 @@ def test_capped_and_invalid_runs_are_excluded_from_the_denominator():
     assert bucket(ArmTally(7, 7), ArmTally(0, 10)) == "deepseek_only"
 
 def test_too_few_valid_runs_refuses_to_classify():
-    with pytest.raises(ValueError, match="insufficient"):
-        bucket(ArmTally(1, 1), ArmTally(0, 10))
+    assert bucket(ArmTally(1, 1), ArmTally(0, 10)) == "insufficient_valid_runs"
+
+def test_a_completed_session_with_an_invalid_grade_is_not_a_valid_run():
+    """Denominators are per-hazard VALID GRADES, not completed agent sessions."""
+    assert bucket(ArmTally(7, 7), ArmTally(0, 10)) == "deepseek_only"
 ```
 
 - [ ] **Step 2: Confirm it fails, then implement**
@@ -1120,11 +1273,13 @@ class ArmTally:
         return self.failures / self.valid_runs
 
 def bucket(deepseek: ArmTally, opus: ArmTally) -> str:
-    for name, tally in (("deepseek", deepseek), ("opus", opus)):
+    """Returns a sentinel rather than raising: an exception here aborts the
+    whole report over one transient invalid run. `n` means VALID GRADES per
+    arm, not attempts - the runner retries invalid and capped attempts up to a
+    preregistered maximum, and attempts/invalids/caps are reported separately."""
+    for tally in (deepseek, opus):
         if tally.valid_runs < MIN_VALID_RUNS:
-            raise ValueError(
-                f"insufficient valid runs for {name}: {tally.valid_runs}"
-            )
+            return "insufficient_valid_runs"
     d, o = deepseek.rate, opus.rate
     if d >= FAIL_HIGH and o <= FAIL_LOW: return "deepseek_only"
     if o >= FAIL_HIGH and d <= FAIL_LOW: return "opus_only"
@@ -1204,5 +1359,5 @@ git push -u origin feat/vertical-slice
 
 1. **Task 1 may invalidate Tasks 8 and 9.** If the real export shape differs from what those tasks assume, they change - that is the point of capturing first.
 2. **`opencode` install inside the agent image** may not work as scripted; the installer may need a pinned tarball instead.
-3. **Egress allowlisting is not implemented in this slice.** The agent container gets full network. Spec §12 requires a proxy; deferred with this explicitly recorded, and it must exist before any unattended multi-run session.
+3. **Egress allowlisting is not implemented in this slice.** Approved 2026-08-27 and recorded as a scoped exception in **spec §12.1**, not a silent violation. Its compensating controls are mandatory: fresh eval-only spend-capped credentials, blocked link-local/metadata routes, attended runs only. The exception expires before phase 1 or before any unattended session, whichever comes first.
 4. **One hazard, not the spec's 3-6.** A deliberate prototype simplification (spec §7), not a hidden shortcut.
