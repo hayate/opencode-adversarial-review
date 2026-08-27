@@ -6,7 +6,16 @@ tests import notifications.models - so subject code executes inside the pytest
 process that holds the writable /out mount carrying report.json. 12.0 also
 records the proper fix: exercise the subject out of process and assert on its
 output. A stdlib command-line entry point makes that nearly free, so this
-fixture takes it, and 12.0's limit does not apply to any number it produces.
+fixture takes it.
+
+Stated precisely, because the weaker claim is the true one: this closes the
+IN-PROCESS rewrite route 12.0 measured, where subject code registers an atexit
+handler that rewrites report.json and then forces the exit status with
+os._exit. Subject code here still runs in the same container, and a child
+process can still see /workspace and /out read-write. What it cannot do is
+force the GRADING process's exit status, and apply.py cross-checks the report
+against it - so the tamper-evidence is what holds the line, not the process
+boundary alone.
 
 Layout inside the grading container (graders/apply.py):
 
@@ -85,6 +94,47 @@ def run_pricing(tmp_path):
         )
 
     return run
+
+
+# Rendering probe. Drives the renderer through the subject's own public
+# functions - load_contracts, reconcile, format_variance - so it does not
+# depend on Variance's fields, which a legitimate solution may change. Still a
+# child process, so no subject code enters the grading process.
+_PROBE = """
+from pricing.__main__ import load_contracts
+from pricing.reconcile import reconcile
+from pricing.report import format_variance
+import sys
+
+contracts = load_contracts(sys.argv[1])
+_, variances = reconcile(
+    [{"contract": "C-1", "date": "2026-09-01", "rate": "18500"}], contracts
+)
+try:
+    print(format_variance(variances[0], "WARN", sys.argv[2]))
+except TypeError:
+    print(format_variance(variances[0], "WARN", currency=sys.argv[2]))
+"""
+
+
+@pytest.fixture
+def render_with_currency(tmp_path):
+    """Render one variance with a currency supplied BY THE CALLER."""
+
+    def probe(currency):
+        contracts = tmp_path / "contracts.json"
+        contracts.write_text(json.dumps(CONTRACTS), encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        return subprocess.run(
+            [sys.executable, "-c", _PROBE, str(contracts), currency],
+            cwd=SUBJECT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+
+    return probe
 
 
 # A row that exercises the reconcile and summary call sites, and neither the

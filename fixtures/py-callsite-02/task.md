@@ -8,7 +8,7 @@ or 500 EUR against a European one, and the two are an order of magnitude apart.
 Reception has escalated two contracts this month that were left unactioned
 because the variance looked trivial and was not.
 
-Every contract already records the currency it settles in.
+Contracts record the currency they settle in, where we have it.
 
 ## User story
 
@@ -49,7 +49,8 @@ I can tell at a glance whether a variance is worth acting on.
 
 **Functionality**
 
-*   Wherever an operator sees a rendered variance, the line states the currency.
+*   Wherever an operator sees a rendered variance, the line states the
+    currency the contract settles in, where the contract records one.
 *   Every caller of `format_variance` supplies the currency. None of them is
     left on the old signature.
 *   Finance's settlement export is unchanged.

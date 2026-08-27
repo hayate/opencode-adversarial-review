@@ -300,3 +300,43 @@ def test_a_report_rewritten_after_the_run_is_not_trusted(fixture, tmp_path):
     result = grade(fixture, tree)
     assert result.hazard_results["H-CALLSITE"] != "pass", result.hazard_results
     assert "exit status" in (result.error or ""), result.error
+
+
+def test_a_censored_hazard_is_attributed_to_the_model_not_dropped(fixture):
+    """A grader that SKIPS a hazard is censoring it, and censoring must be
+    counted or it is silent.
+
+    A fixture may skip a hazard it cannot observe - py-callsite-02's guards
+    skip when the subject does not run at all, so one defect cannot fail three
+    hazards. That lands as setup.outcome == "skipped" with no call phase, which
+    _classify already reads as `invalid`. But `setup_broken` matched only
+    "error", so cause came back None, and record_grade then increments NOTHING:
+    the per-hazard ungradable tally is gated on cause == MODEL_OUTPUT, and
+    invalid_harness is gated on nothing else having graded.
+
+    The censored hazards therefore vanished from summary.json entirely. That
+    matters because bucket() takes rates over valid runs: the arm that ships
+    broken code more often has more of its guard evidence deleted, biasing
+    those guards toward parity - the very defect the skip was introduced to
+    fix, one layer down.
+    """
+    def entry(nodeid, skipped):
+        if skipped:
+            return {"nodeid": nodeid, "setup": {"outcome": "skipped"},
+                    "call": None, "teardown": {"outcome": "passed"}}
+        return {"nodeid": nodeid, "setup": {"outcome": "passed"},
+                "call": {"outcome": "failed"}, "teardown": {"outcome": "passed"}}
+
+    # EVERY declared node id reports, so `missing_nodeids` is not what is
+    # under test here - only the skip is.
+    report = {"tests": [
+        entry(nodeid, skipped=hazard["id"] != "H-CALLSITE")
+        for hazard in fixture.hazards
+        for nodeid in hazard["tests"]
+    ]}
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-CALLSITE"] == "fail"
+    assert result.hazard_results["H-EXCLUDED"] == "invalid"
+    assert result.cause == "model_output", (
+        "a skipped hazard with no cause increments nothing in record_grade"
+    )

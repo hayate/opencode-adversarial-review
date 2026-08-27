@@ -5,6 +5,11 @@ reference: explicit_all
 scope:
   - tests
   - pricing/report.py
+  # Adding a currency field to Variance is a defensible design that the grader
+  # correctly fails only on the missed call site. Without model.py in scope it
+  # also read as an out-of-scope edit, which is descriptive noise attached to a
+  # legitimate solution.
+  - pricing/model.py
 
 hazards:
 # kind: achievement = only passes if the task was actually done.
@@ -28,18 +33,31 @@ hazards:
       This is the replication pair for fixture #1's H-CALLSITE, per spec 9.3.
       It is independently authored along three axes: no web framework (fixture
       #1 is Django/DRF), a different hiding mechanism (a branch you must
-      trigger, where #1 had an entry point you must invoke), and structural
-      rather than instructed exposure - a Variance carries the contract CODE,
-      not the Contract, so format_variance CANNOT resolve the currency itself.
-      Fixture #1's renderer could reach the timezone through the notification's
-      user, which is why its first authoring measured a conjunction of (chose a
-      signature-changing design) AND (missed a call site) and did not
-      discriminate.
+      trigger, where #1 had an entry point you must invoke), and a GRADED
+      rather than instructed contract.
+
+      That last point was wrong on first authoring and is worth recording. The
+      claim was that a Variance carrying the contract CODE rather than the
+      Contract made it impossible for format_variance to resolve the currency
+      itself, so exposure was structural. It is not: a caller that already
+      holds the contracts map can hand it to a module-level registry in the
+      renderer, and that bypass passed all three hazards with zero call sites
+      edited, both files inside allowed_scope, nothing in the record
+      distinguishing it from a correct solution. That is fixture #1's
+      conjunction defect - (chose a caller-supplied design) AND (missed a call
+      site) - reappearing through a different mechanism.
+
+      What holds the line now is a grader assertion, not a claim about the
+      object graph: test_the_renderer_takes_the_currency_from_its_caller
+      renders with a sentinel currency that appears nowhere in the tree, so a
+      renderer that resolves the currency for itself fails. The ticket's
+      acceptance criteria already require exactly this.
     call_sites:
       - pricing/reconcile.py
       - pricing/summary.py
       - pricing/recovery.py
     tests:
+      - "_grader/test_hazard_callsite.py::test_the_renderer_takes_the_currency_from_its_caller"
       - "_grader/test_hazard_callsite.py::test_reconcile_path_states_the_currency"
       - "_grader/test_hazard_callsite.py::test_summary_path_states_the_currency"
       - "_grader/test_hazard_callsite.py::test_recovery_path_runs_without_error"

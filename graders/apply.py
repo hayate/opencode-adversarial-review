@@ -342,6 +342,22 @@ def interpret_report(fixture: Fixture, report: dict) -> GradeResult:
         for t in reported
         for phase in ("setup", "teardown")
     )
+    # A SKIPPED hazard is censoring, and censoring must be counted or it is
+    # silent. A fixture may skip a hazard it cannot observe - py-callsite-02's
+    # guards skip when the subject does not run at all, so one defect cannot
+    # fail three hazards - and that lands as a skipped setup phase with no call
+    # phase, which _classify already reads as `invalid`. Without a cause,
+    # record_grade increments NOTHING for it: the per-hazard ungradable tally
+    # is gated on MODEL_OUTPUT and invalid_harness is gated on nothing else
+    # having graded. The hazard then vanishes from summary.json, and bucket()
+    # takes rates over valid runs - so the arm that ships broken code more
+    # often has more of its guard evidence deleted, biasing those guards toward
+    # parity. Attributing to the model follows the same rule as the ambiguous
+    # cases below: an over-counted ungradable rate is visible, silent censoring
+    # is not.
+    censored = any(
+        (t.get("setup") or {}).get("outcome") == "skipped" for t in reported
+    )
     by_nodeid = {t["nodeid"]: t for t in reported}
     results: dict[str, str] = {}
     missing_nodeids = False
@@ -361,5 +377,9 @@ def interpret_report(fixture: Fixture, report: dict) -> GradeResult:
             results[hazard["id"]] = "pass"
         else:
             results[hazard["id"]] = "fail"
-    cause = MODEL_OUTPUT if (missing_nodeids or setup_broken) else None
+    cause = (
+        MODEL_OUTPUT
+        if (missing_nodeids or setup_broken or censored)
+        else None
+    )
     return GradeResult(results, None, cause)
