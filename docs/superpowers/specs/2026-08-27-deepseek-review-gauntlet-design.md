@@ -349,8 +349,8 @@ hazards must replicate within their own language.
 
 #### Observed, not invented (added 2026-08-27)
 
-Derived from reading real engineering tickets in the Wayfarer ClickUp "Dev"
-space. Per section 7.1 these outrank the invented hazards above and survive
+Derived from reading real engineering tickets in a production issue
+tracker. Per section 7.1 these outrank the invented hazards above and survive
 first when the list is cut.
 
 | id | Planted hazard | Grader | Repl. |
