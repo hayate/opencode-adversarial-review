@@ -250,3 +250,34 @@ def test_a_redirect_into_the_subject_is_still_an_edit():
         changes=NO_CHANGES, allowed_scope=set(), must_read={"notifications/views.py"},
     )
     assert "notifications/views.py" in obs["edited_paths"]
+
+
+def test_read_before_edit_is_false_when_the_census_came_after_the_first_edit():
+    """False does not mean the model failed to look.
+
+    The natural order for this task - open the helper, change it, then census
+    its callers - reads every required path but reads them after the first
+    edit, so the signal is False while `read_paths` shows all three. The
+    signal is descriptive and feeds no verdict, but it is reported next to
+    H-CALLSITE, and reading it as "did not look" would manufacture a
+    difference out of workflow order rather than diligence - the same confound
+    class as the bash-reads artifact this module already carries.
+    """
+    sites = {
+        "pricing/reconcile.py",
+        "pricing/summary.py",
+        "pricing/recovery.py",
+    }
+    obs = observations(
+        _session(
+            _tool("edit", input={"filePath": "/workspace/pricing/report.py"}),
+            *[_bash(f"cat {site}") for site in sorted(sites)],
+        ),
+        changes=NO_CHANGES,
+        allowed_scope=set(),
+        must_read=sites,
+    )
+    assert obs["read_before_edit"] is False
+    assert set(obs["read_paths"]) >= sites, (
+        "the census IS visible in read_paths; only the ordering signal is False"
+    )

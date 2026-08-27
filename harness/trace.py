@@ -261,9 +261,17 @@ def observations(
         if first_edit is None or index < first_edit
     }
 
-    # Tri-state. False is a claim that the model did not look; it must not be
-    # returned when the evidence could not have shown looking, nor when there
-    # is nothing it was required to read.
+    # Tri-state. None means the evidence could not have shown looking, or
+    # there was nothing it was required to read.
+    #
+    # False means "not every required path was read before the first edit
+    # anywhere in the run". It does NOT mean the model failed to look: the
+    # natural order for a signature change - open the helper, change it, then
+    # census its callers - reads everything and still scores False, with the
+    # reads plainly visible in read_paths. Read it as diligence and a
+    # difference in workflow order between two arms becomes a difference in
+    # care, which is the confound class the bash-reads artifact above already
+    # cost this harness once. Descriptive only; it feeds no verdict.
     if not trace_complete or not must_read:
         read_before_edit = None
     else:
