@@ -75,3 +75,10 @@ def test_exploration_stage_yields_candidates_not_verdicts():
 def test_confirmation_n_is_where_a_verdict_becomes_unqualified():
     assert bucket(ArmTally(8, 9), ArmTally(0, 9)).startswith("candidate_")
     assert not bucket(ArmTally(8, 10), ArmTally(0, 10)).startswith("candidate_")
+
+
+def test_both_is_also_qualified_below_confirmation():
+    """The `both` branch returned early without the confirmation check, so an
+    exploratory 3/3-vs-3/3 screen published as an unqualified verdict."""
+    assert bucket(ArmTally(3, 3), ArmTally(3, 3)) == "candidate_both"
+    assert bucket(ArmTally(8, 10), ArmTally(7, 10)) == "both"

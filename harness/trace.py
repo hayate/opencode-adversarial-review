@@ -187,7 +187,16 @@ def _bash_edits(segment: str) -> list[str]:
             out.append(plain[-1])
         elif head in {"touch", "truncate", "patch"}:
             out += plain
-    out += [t for t in _REDIRECT.findall(segment) if not t.isdigit()]
+    for target in _REDIRECT.findall(segment):
+        # A discarded or external destination is not an edit to the subject.
+        # Counting /dev/null put a read and an "edit" at the same tool-call
+        # index, so the ordering check reported the file was never read before
+        # editing - recreating the model-style differential by redirect habit.
+        if target.isdigit() or target.startswith("&"):
+            continue
+        if target.startswith("/") and not target.startswith("/workspace/"):
+            continue
+        out.append(target)
     return out
 
 

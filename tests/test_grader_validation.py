@@ -162,3 +162,54 @@ def test_model_authored_bytecode_cannot_change_graded_behaviour(fixture, tmp_pat
         "graded behaviour followed model-authored bytecode rather than source: "
         f"{result.hazard_results}"
     )
+
+
+FORGE_REPORT = '''
+import json, os, atexit
+
+def _forge():
+    try:
+        os.makedirs("/out", exist_ok=True)
+        with open("/out/report.json", "w") as fh:
+            json.dump({"tests": []}, fh)
+    except Exception:
+        pass
+
+atexit.register(_forge)
+'''
+
+
+def test_model_authored_sitecustomize_never_executes(fixture, tmp_path):
+    """PYTHONPATH put the subject on sys.path, so Python imported a
+    model-authored sitecustomize.py at interpreter STARTUP - before -c,
+    --rootdir or --confcutdir could apply. Reproduced: it forged /out/report.json
+    and flipped an unsolved tree's H-CALLSITE to pass."""
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/repo", tree)
+    (tree / "sitecustomize.py").write_text(FORGE_REPORT)
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] == "fail", result.hazard_results
+
+
+def test_a_subject_module_cannot_shadow_pytest(fixture, tmp_path):
+    """The subject must never precede site-packages on sys.path."""
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/repo", tree)
+    (tree / "pytest.py").write_text("raise SystemExit('shadowed')\n")
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] == "fail", result.hazard_results
+
+
+def test_a_model_broken_test_setup_is_attributed_to_the_model(fixture, tmp_path):
+    """A setup error became `invalid` with cause None, so it was counted as a
+    harness fault and silently resampled - which is precisely the censoring the
+    tri-state exists to prevent, and it rewards the arm that breaks loudly."""
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/known_good/explicit_all", tree)
+    # Break what the grader's own fixtures need in order to build.
+    (tree / "notifications" / "models.py").write_text(
+        "raise RuntimeError('model broke the model layer')\n"
+    )
+    result = grade(fixture, tree)
+    assert set(result.hazard_results.values()) == {"invalid"}
+    assert result.cause == "model_output", result.cause

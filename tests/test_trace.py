@@ -224,3 +224,29 @@ def test_must_read_empty_does_not_vacuously_claim_diligence():
     obs = observations(_session(_bash("cat x.py")), changes=NO_CHANGES,
                        allowed_scope=set(), must_read=set())
     assert obs["read_before_edit"] is None
+
+
+@pytest.mark.parametrize("command", [
+    "cat notifications/views.py 2>/dev/null",
+    "grep -rn timezone notifications/ 2>/dev/null",
+    "cat notifications/views.py > /dev/null",
+])
+def test_a_discarded_redirect_is_not_an_edit(command):
+    """The redirect regex recorded every destination as an edit, including
+    /dev/null - so a read and an 'edit' landed at the same tool-call index and
+    the ordering check reported the file was not read before editing, although
+    nothing in the subject changed. Models differ in how much they redirect
+    diagnostics, so this recreated the very differential the fix removed."""
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+        must_read={"notifications/views.py"},
+    )
+    assert obs["edited_paths"] == [], command
+
+
+def test_a_redirect_into_the_subject_is_still_an_edit():
+    obs = observations(
+        _session(_bash("echo x > notifications/views.py")),
+        changes=NO_CHANGES, allowed_scope=set(), must_read={"notifications/views.py"},
+    )
+    assert "notifications/views.py" in obs["edited_paths"]

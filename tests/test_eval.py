@@ -123,3 +123,15 @@ def test_attempts_are_counted_for_every_outcome():
     acc.record_grade(_grade())
     acc.record_nongrade("capped")
     assert acc.summary()["attempts"] == 2
+
+
+def test_a_hazard_stops_accumulating_once_it_reaches_n():
+    """record_grade incremented every valid hazard on every attempt, including
+    hazards already at n. If one hazard is repeatedly ungradable, another could
+    reach 20 grades on one arm while the other arm stopped at 10 - and bucket()
+    then compares different sample sizes and different time windows."""
+    acc = Accounting(HAZARDS, n=2)
+    for _ in range(5):
+        acc.record_grade(_grade(**{"H-CALLSITE": "invalid"}), cause="model_output")
+    assert acc.valid["H-EXCLUDED"] == 2, "denominator ran past the preregistered n"
+    assert acc.failures["H-EXCLUDED"] == 0

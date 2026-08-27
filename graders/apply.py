@@ -32,7 +32,21 @@ from harness.sandbox import run_in_sandbox
 GRADING_IMAGE = "localhost/odr-grading:latest"
 GRADER_MOUNT = "_grader"
 SUBJECT_DIR = "subject"
+HARNESS_DIR = "_harness"
 GRADER_INI = "pytest.ini"
+
+# The subject must be importable but must NOT be on sys.path at interpreter
+# startup. Putting it on PYTHONPATH meant Python imported a model-authored
+# sitecustomize.py before -c, --rootdir or --confcutdir could apply - verified
+# by forging /out/report.json from one, which flipped an unsolved tree's
+# H-CALLSITE to pass. A subject module could equally shadow pytest itself.
+#
+# So PYTHONPATH points at a HARNESS-owned directory whose sitecustomize APPENDS
+# the subject after startup: trusted code runs first, and the subject can never
+# precede site-packages.
+_SITECUSTOMIZE = """import sys
+sys.path.append("/workspace/{subject}")
+""".format(subject=SUBJECT_DIR)
 
 # Bytecode is stripped rather than ignored. snapshot() excludes it from the
 # reported diff (it is build detritus and floods out_of_scope_paths), so any
@@ -54,8 +68,9 @@ _PYTEST_ARGV = [
 ]
 
 _GRADING_ENV = {
-    "PYTHONPATH": f"/workspace/{SUBJECT_DIR}",
+    "PYTHONPATH": f"/workspace/{HARNESS_DIR}",
     "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
 }
 
 
@@ -128,10 +143,15 @@ def _stage(fixture: Fixture, tree: Path, work: Path) -> tuple[str, str] | None:
     # lexists, not exists: exists() follows links, so a dangling _grader
     # symlink would slip past. Kept even though the subject now lives in its
     # own directory and can no longer collide with the mounted grader.
-    if os.path.lexists(subject / GRADER_MOUNT):
-        return f"{GRADER_MOUNT} is reserved and was present in the tree", MODEL_OUTPUT
+    for reserved in (GRADER_MOUNT, HARNESS_DIR):
+        if os.path.lexists(subject / reserved):
+            return f"{reserved} is reserved and was present in the tree", MODEL_OUTPUT
 
     _strip_bytecode(subject)
+
+    harness_dir = work / HARNESS_DIR
+    harness_dir.mkdir(parents=True, exist_ok=True)
+    (harness_dir / "sitecustomize.py").write_text(_SITECUSTOMIZE)
 
     try:
         shutil.copytree(fixture.root / "grader", work / GRADER_MOUNT, symlinks=True)
@@ -239,8 +259,23 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
             # hanging on import or at module scope.
             return _all_invalid(fixture, "grader timed out", MODEL_OUTPUT)
         if not report_path.exists():
+            # Distinguish "pytest ran and could not get started against this
+            # tree" from "the container never ran". pytest's own exit codes are
+            # 0-5; podman failures are 125-127 and a sandbox timeout is -1.
+            #
+            # A conftest that cannot import - because the model broke a module
+            # the grader's fixtures depend on - fails before the json-report
+            # plugin ever configures, so no report is written at all. That is
+            # model output, and calling it a harness fault would silently
+            # resample exactly the catastrophic runs the tri-state exists to
+            # keep visible. Where it is ambiguous, attribute to the model: an
+            # over-counted ungradable rate is visible, silent censoring is not.
+            started = result.exit_code in (0, 1, 2, 3, 4, 5)
             return _all_invalid(
-                fixture, f"grader produced no report: {result.stderr[-800:]}", HARNESS
+                fixture,
+                f"grader produced no report (pytest exit {result.exit_code}): "
+                f"{result.stderr[-800:]}",
+                MODEL_OUTPUT if started else HARNESS,
             )
         try:
             report = json.loads(report_path.read_text())
@@ -249,7 +284,18 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
                 fixture, f"grader report is not valid JSON: {exc}", HARNESS
             )
 
-    by_nodeid = {t["nodeid"]: t for t in report.get("tests", [])}
+    reported = report.get("tests", [])
+    # A setup or teardown error means the grader's own fixtures could not build
+    # against this tree. The grader is fixed and its fixtures are known good, so
+    # the cause is subject code - and attributing it to the harness would
+    # silently resample exactly the catastrophic runs the tri-state exists to
+    # keep visible.
+    setup_broken = any(
+        (t.get(phase) or {}).get("outcome") == "error"
+        for t in reported
+        for phase in ("setup", "teardown")
+    )
+    by_nodeid = {t["nodeid"]: t for t in reported}
     results: dict[str, str] = {}
     missing_nodeids = False
     for hazard in fixture.hazards:
@@ -268,5 +314,5 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
             results[hazard["id"]] = "pass"
         else:
             results[hazard["id"]] = "fail"
-    cause = MODEL_OUTPUT if missing_nodeids else None
+    cause = MODEL_OUTPUT if (missing_nodeids or setup_broken) else None
     return GradeResult(results, None, cause)

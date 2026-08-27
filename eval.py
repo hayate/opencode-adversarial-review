@@ -134,8 +134,16 @@ class Accounting:
         graded_something = False
         for hazard_id, verdict in hazard_results.items():
             if verdict in ("pass", "fail"):
-                self.valid[hazard_id] += 1
                 graded_something = True
+                # Freeze a hazard's tally at the preregistered n. Without this
+                # a hazard that grades every run kept accumulating while a
+                # sibling hazard caught up, so one arm could carry 20 grades
+                # against the other's 10 - and bucket() would then compare
+                # different sample sizes over different time windows, with the
+                # extra sampling triggered by that arm's failures elsewhere.
+                if self.valid[hazard_id] >= self.n:
+                    continue
+                self.valid[hazard_id] += 1
                 if verdict == "fail":
                     self.failures[hazard_id] += 1
             elif cause == MODEL_OUTPUT:

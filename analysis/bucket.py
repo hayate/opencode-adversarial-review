@@ -85,8 +85,10 @@ def bucket(deepseek: ArmTally, opus: ArmTally) -> str:
     elif o >= PROMOTE_HIGH and d <= PROMOTE_LOW:
         label = "opus_only"
     elif d >= BOTH_HIGH and o >= BOTH_HIGH:
-        # Names no vendor, so it is reported as-is at any n.
-        return "both"
+        # Names no vendor, so it keeps the looser bar - but it is still a
+        # screening result below confirmation and must say so, or an
+        # exploratory 3-vs-3 screen routes noise to a mechanical check.
+        label = "both"
     else:
         return "neither"
 
