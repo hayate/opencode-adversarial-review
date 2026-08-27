@@ -213,6 +213,7 @@ def observations(
     *,
     changes: Changes,
     allowed_scope: set[str],
+    excluded_paths: set[str] | frozenset[str] = frozenset(),
     must_read: set[str] | frozenset[str] = frozenset(),
 ) -> dict:
     calls = tool_calls(session)
@@ -286,7 +287,7 @@ def observations(
         "edited_paths": [p for _, p in edit_events],
         # Derived from the filesystem, not from tool calls: bash writes, patch
         # tools and generated files are invisible to tool-call inspection.
-        "out_of_scope_paths": changes.outside(allowed_scope),
+        "out_of_scope_paths": changes.outside(allowed_scope, excluded_paths),
         "concluded_done": concluded_done,
         "finish_reasons": [a.get("finish") for a in assistants],
     }

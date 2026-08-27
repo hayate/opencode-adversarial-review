@@ -39,20 +39,31 @@ class Changes:
     def touched(self) -> set[str]:
         return self.added | self.modified | self.deleted
 
-    def outside(self, allowed_scope: set[str]) -> set[str]:
+    @staticmethod
+    def _covers(entry: str, path: str) -> bool:
+        """Scope entries name a file or a directory prefix."""
+        return path == entry or path.startswith(f"{entry.rstrip('/')}/")
+
+    def outside(
+        self, allowed_scope: set[str], excluded: set[str] | frozenset[str] = frozenset()
+    ) -> set[str]:
         """Paths changed outside the ticket's stated scope.
 
         Derived from what actually changed on disk, never from which tool calls
         the model made - bash writes, patch tools and generated files are
         invisible to tool-call inspection.
+
+        `excluded` is applied here rather than by subtracting from the scope
+        set, because scope entries match as directory PREFIXES. Subtracting the
+        strings left an excluded file that sits UNDER a scoped directory - scope
+        `tests`, excluded `tests/test_digest.py` - still in bounds, so the guard
+        could not fire on the case it exists for.
         """
         return {
             path
             for path in self.touched()
-            if not any(
-                path == allowed or path.startswith(f"{allowed.rstrip('/')}/")
-                for allowed in allowed_scope
-            )
+            if any(self._covers(e, path) for e in excluded)
+            or not any(self._covers(a, path) for a in allowed_scope)
         }
 
 

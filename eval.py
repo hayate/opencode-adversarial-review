@@ -90,15 +90,21 @@ def allowed_scope(fixture) -> set[str]:
     scope = set(fixture.scope)
     for hazard in fixture.hazards:
         scope.update(hazard.get("call_sites") or [])
-    # A hazard's excluded paths are out of bounds by definition. Without this
-    # the scope model and the grader measured "out of scope" by two unrelated
-    # definitions, connected only through call_sites.
-    excluded = {
+    return scope
+
+
+def excluded_paths(fixture) -> set[str]:
+    """Paths a hazard puts out of bounds.
+
+    Applied at match time rather than subtracted from the scope set: scope
+    entries match as directory prefixes, so subtraction could not remove an
+    excluded file sitting under a scoped directory.
+    """
+    return {
         path
         for hazard in fixture.hazards
         for path in (hazard.get("excluded_paths") or [])
     }
-    return scope - excluded
 
 
 def must_read(fixture) -> set[str]:
@@ -211,7 +217,9 @@ def run_command(args) -> None:
     (report_dir / "provenance.json").write_text(json.dumps(_provenance(arms), indent=2))
     records_path = report_dir / "records.jsonl"
 
-    scope, reads = allowed_scope(fixture), must_read(fixture)
+    scope, excluded, reads = (
+        allowed_scope(fixture), excluded_paths(fixture), must_read(fixture),
+    )
     hazard_ids = [h["id"] for h in fixture.hazards]
     books = {arm.name: Accounting(hazard_ids, args.n) for arm in arms}
     spend = 0.0
@@ -268,7 +276,8 @@ def run_command(args) -> None:
                     graded = grade(fixture, work)
                     obs = observations(
                         result.session, changes=result.changes,
-                        allowed_scope=scope, must_read=reads,
+                        allowed_scope=scope, excluded_paths=excluded,
+                        must_read=reads,
                     )
                     obs["out_of_scope_paths"] = sorted(obs["out_of_scope_paths"])
                     # Spec section 8: T-CLAIMDONE is the CONJUNCTION of the

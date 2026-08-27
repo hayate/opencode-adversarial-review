@@ -7,7 +7,7 @@ substantial change appear as an empty diff.
 
 import os
 
-from harness.snapshot import diff_snapshots, snapshot
+from harness.snapshot import Changes, diff_snapshots, snapshot
 
 
 def test_detects_added_modified_and_deleted(tmp_path):
@@ -116,3 +116,26 @@ def test_an_unreadable_file_does_not_crash_the_whole_eval(tmp_path):
         locked.chmod(0o644)
     assert "locked.py" in result
     assert result["locked.py"].startswith("unreadable:")
+
+
+def test_an_excluded_path_under_a_scoped_directory_is_out_of_bounds():
+    """allowed_scope subtracted excluded paths by exact string, while
+    outside() matches scope entries as directory PREFIXES. So scope `tests`
+    plus excluded `tests/test_digest.py` left the excluded file in bounds -
+    the subtraction could not see it, and the guard as written never fires."""
+    changes = Changes(added=set(), modified={"tests/test_digest.py"}, deleted=set())
+    assert changes.outside({"tests"}, excluded={"tests/test_digest.py"}) == {
+        "tests/test_digest.py"
+    }
+
+
+def test_a_sibling_of_an_excluded_path_stays_in_bounds():
+    changes = Changes(added=set(), modified={"tests/test_views.py"}, deleted=set())
+    assert changes.outside({"tests"}, excluded={"tests/test_digest.py"}) == set()
+
+
+def test_everything_under_an_excluded_directory_is_out_of_bounds():
+    changes = Changes(added=set(), modified={"notifications/digest.py"}, deleted=set())
+    assert changes.outside(
+        {"notifications"}, excluded={"notifications/digest.py"}
+    ) == {"notifications/digest.py"}

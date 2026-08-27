@@ -166,3 +166,148 @@ fixture is merely easy; or (b) it means "did you find the call sites", in which
 case `derive_internal` must not be a blessed known_good. This changes what the
 fixture measures, so it is a measurement-design decision. The harness-side
 mechanism (recording an exposure predicate per run) is implementable either way.
+
+---
+
+# Round 2 - the fix wave's own defects
+
+Scoped to `git diff 2f427c3..HEAD`, asking one question: did this wave introduce
+anything? Codex only; the agent lenses had nothing new to bring to a delta this
+targeted, and a lens repeating a technique adds noise rather than coverage.
+
+**Four of the five findings sat inside round 1's fixes.** That is the signal
+CLAUDE.md names for a random walk. The round was still justified, because the
+first finding is model-authored code crossing the grading boundary - the same
+class as BL-1, which round 1 had supposedly closed.
+
+### R2-1. Grading was still subject-controlled (blocker, reproduced)
+Round 1 moved the subject off pytest's COLLECTION path but left it on the
+IMPORT path via `PYTHONPATH`. Python imports `sitecustomize.py` from PYTHONPATH
+during interpreter startup - before `-c`, `--rootdir` or `--confcutdir` can
+apply. Reproduced: a model-authored sitecustomize forged `/out/report.json` and
+flipped an unsolved tree's H-CALLSITE from fail to pass. A subject module could
+equally have shadowed `pytest` itself.
+
+The distinction that matters: `--confcutdir` and `-c` are pytest-level controls
+and they work, but PYTHONPATH is consumed by the interpreter before pytest's
+main() exists. A defence expressed entirely in pytest arguments cannot reach an
+attack that lands below pytest. Fixed by pointing PYTHONPATH at a
+harness-authored `_harness/sitecustomize.py` that APPENDS the subject after
+startup - append rather than prepend, or the shadowing hole returns.
+
+### R2-2. Model-caused failures still vanished as harness faults (high)
+`cause` became `model_output` only when node ids were missing. A setup or
+teardown error - or a grader conftest that cannot import because the model
+broke a module its fixtures depend on, which writes no report at all - was
+attributed to the harness and silently resampled. That is exactly the censoring
+the tri-state exists to prevent, and it rewards the arm that breaks loudly.
+Ambiguous cases now attribute to the model: an over-counted ungradable rate is
+visible, silent censoring is not.
+
+### R2-3. Denominators could run past n (high)
+`record_grade` incremented every valid hazard on every attempt, including
+hazards already at n, so one arm could carry 20 grades against the other's 10 -
+with the extra sampling triggered by that arm's failures on an unrelated
+hazard. Tallies now freeze at n.
+
+### R2-4. `2>/dev/null` counted as an edit (medium)
+The redirect regex recorded every destination, so a read and an "edit" landed
+at the same tool-call index and the ordering check reported the file was never
+read before editing. This recreated the model-style differential the trace fix
+had just removed, keyed this time on redirect habit.
+
+### R2-5. `both` bypassed the candidate marker (medium)
+An exploratory 3-vs-3 screen published as an unqualified verdict.
+
+### Cleared by round 2
+The adopted vendor thresholds, bytecode stripping, non-zero exit handling, the
+permission allowlist, and manifest validation were all examined and found
+sound.
+
+## Verification
+
+All three exploit reproductions re-run after the round-2 fixes:
+
+    sitecustomize forgery   -> H-CALLSITE fail   (was pass)
+    conftest hookwrapper    -> H-CALLSITE fail
+    unchecked-hash pyc      -> H-CALLSITE fail
+
+while `explicit_all`, `derive_internal` and `keyword_only` still pass every
+hazard - the holes are closed without dulling the grader. Suite: 156 tests,
+from 86 at the start of the gauntlet.
+
+---
+
+# Round 3 - mutation testing, and a focused pass on the grading boundary
+
+Two lenses, both bringing techniques nobody had used.
+
+## Mutation testing: do the guards actually fire?
+
+29 mutations against the guards this gauntlet added, each applied to a scratch
+copy and reverted. **20 killed, 9 survived**, plus 4 combination mutations.
+
+The survivors split cleanly:
+
+**Defence in depth, not holes (1, 2, 4).** Removing `--confcutdir`, `-c` and
+even restoring the original layout all leave the isolation tests green, because
+the mechanism actually doing the work is that **the grader ships its own
+pytest.ini as pytest's sole argument**: ini discovery finds it first, which sets
+the implicit confcutdir above the model's tree. Verified three ways in-container,
+including deleting the grader ini, at which point the attack lands. Worth
+knowing rather than acting on - except that the load-bearing guard
+(`_stage`'s check that the grader ini exists) had no test. It does now.
+
+**Real gaps (6, 7, 20, 22, 24, 28), all fixed:**
+- `validate_hazard_mapping`'s exit-code check had no test; a missing image
+  still blamed the fixture.
+- `any(t is None)` vs `all(...)` differ only on a PARTIAL report. Unreachable on
+  this fixture today, reachable the moment a hazard spans two grader files.
+  Report interpretation is now a pure function with a direct test.
+- **A real bug, not just a gap:** `allowed_scope` subtracted excluded paths by
+  exact string while `Changes.outside()` matches scope entries as directory
+  PREFIXES. Scope `tests` plus excluded `tests/test_digest.py` left the excluded
+  file in bounds - the guard could not fire on the case it exists for.
+  Exclusion is now applied at match time.
+- `test_a_missing_exit_code_does_not_invalidate_a_good_run` passed
+  `capped=True`, so it returned on the capped branch and never reached its own
+  stated subject. Rewritten.
+- `assert_sterile`'s permission assertion had no negative control; the property
+  was tested, the guard was not.
+- `run_agent`'s call to `assert_container_manifest` was unpinned - the same
+  shape as round 1's zero-caller guards, one level up. The call site is now
+  pinned by a tripwire test.
+
+## Grading boundary: two critical findings
+
+**Closed and verified:** subject `sitecustomize` is not reached after the
+harness copy; `usercustomize` is disabled; subject `.pth` files are not
+processed by appending; pytest/py/_pytest/django/json/os win path resolution;
+`-c`/`--confcutdir` prevent subject config discovery.
+
+**CLOSED THIS ROUND - subject-owned dist-info plugin autoload.** Appending the
+subject to sys.path made any subject `*.dist-info/entry_points.txt` visible to
+importlib.metadata, and pytest loads every `pytest11` entry point it finds. A
+model could register its own module as a plugin and reinstate the exact
+`pytest_runtest_makereport` hookwrapper attack the conftest isolation prevents;
+append-versus-prepend does nothing about entry-point enumeration. Fixed with
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` plus explicit `-p pytest_django.plugin -p
+pytest_jsonreport.plugin`. Verified: an unsolved tree carrying a hostile
+dist-info now grades H-CALLSITE `fail`.
+
+**OPEN - imported subject code can rewrite the report at interpreter exit.**
+The grader's conftest imports `notifications.models` by design, so
+model-authored module-level code executes inside the pytest process, which also
+holds the writable `/out` mount. An `atexit` handler can wait for
+pytest-json-report to save `/out/report.json` and rewrite every outcome.
+
+Measured, rather than argued:
+
+    naive forgery (rewrites the report)        -> CAUGHT, marked invalid
+    determined forgery (also forces exit 0)    -> SUCCEEDS, unsolved tree passes
+
+The mitigation added this round cross-checks pytest's exit status against the
+report, which makes the report tamper-EVIDENT and catches the naive case. It
+does not close the hole: code that also controls the exit status forges a pass.
+No in-process measure can close it, because the subject shares the process with
+the authority. **This needs an architecture decision (see Open decisions).**

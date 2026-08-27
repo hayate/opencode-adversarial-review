@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from graders.apply import grade, validate_hazard_mapping
+from graders.apply import grade, interpret_report, validate_hazard_mapping
 from harness.fixture import FixtureViolation, load_fixture
 
 FIXTURE = "fixtures/py-callsite-01"
@@ -213,3 +213,82 @@ def test_a_model_broken_test_setup_is_attributed_to_the_model(fixture, tmp_path)
     result = grade(fixture, tree)
     assert set(result.hazard_results.values()) == {"invalid"}
     assert result.cause == "model_output", result.cause
+
+
+def test_infrastructure_faults_during_collection_do_not_blame_the_fixture(
+    fixture, monkeypatch
+):
+    """A missing or renamed grading image produced no "::" lines, so every
+    declared test read as uncollectable and the fixture took the blame for a
+    podman problem."""
+    monkeypatch.setattr("graders.apply.GRADING_IMAGE", "localhost/odr-does-not-exist:latest")
+    with pytest.raises(FixtureViolation) as excinfo:
+        validate_hazard_mapping(fixture)
+    message = str(excinfo.value)
+    assert "infrastructure" in message, message
+    assert "do not collect" not in message, message
+
+
+def test_a_grader_without_its_own_pytest_ini_is_refused(fixture, tmp_path):
+    """This guard is what actually keeps grading isolated: pytest's ini
+    discovery finds _grader/pytest.ini first, which also sets the implicit
+    confcutdir above the model's tree. Nothing exercised it, so the mechanism
+    the isolation really rests on had no test that fails when it breaks."""
+    import dataclasses
+
+    root = tmp_path / "fx"
+    shutil.copytree(FIXTURE, root)
+    (root / "grader" / "pytest.ini").unlink()
+    broken = dataclasses.replace(fixture, root=root)
+    result = grade(broken, f"{FIXTURE}/known_good/explicit_all")
+    assert set(result.hazard_results.values()) == {"invalid"}
+    assert "pytest config" in (result.error or ""), result.error
+
+
+def test_a_partially_reported_hazard_is_invalid_not_graded_on_a_subset(fixture):
+    """`any(t is None)` and `all(t is None)` differ only on a PARTIAL report -
+    some declared node ids present, some absent. Unreachable on this fixture
+    today because each hazard's tests live in one grader file, but it opens the
+    moment a hazard spans two files or json-report truncates. A hazard graded
+    on whichever subset happened to report is exactly the censoring the
+    tri-state exists to prevent."""
+    hazard = next(h for h in fixture.hazards if h["id"] == "H-CALLSITE")
+    present = hazard["tests"][0]
+    report = {"tests": [{
+        "nodeid": present,
+        "setup": {"outcome": "passed"},
+        "call": {"outcome": "passed"},
+        "teardown": {"outcome": "passed"},
+    }]}
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-CALLSITE"] == "invalid"
+    assert result.cause == "model_output"
+
+
+def test_a_report_rewritten_after_the_run_is_not_trusted(fixture, tmp_path):
+    """Subject modules execute inside the grading process by design - the
+    grader's conftest imports them - so a report that process could rewrite is
+    not self-validating. Cross-checking pytest's exit status against the report
+    makes the naive rewrite tamper-EVIDENT.
+
+    This does NOT close the hole: code that also forces the exit status still
+    forges a pass. That needs containment, not a filename rule. See
+    docs/reviews/2026-08-27-gauntlet-round-1.md."""
+    tree = tmp_path / "tree"
+    shutil.copytree(f"{FIXTURE}/repo", tree)
+    models = tree / "notifications" / "models.py"
+    models.write_text(
+        "import atexit, json\n"
+        "def _forge():\n"
+        "    try:\n"
+        "        r = json.load(open('/out/report.json'))\n"
+        "        for t in r.get('tests', []):\n"
+        "            for p in ('setup', 'call', 'teardown'):\n"
+        "                if p in t: t[p]['outcome'] = 'passed'\n"
+        "        json.dump(r, open('/out/report.json', 'w'))\n"
+        "    except Exception: pass\n"
+        "atexit.register(_forge)\n" + models.read_text()
+    )
+    result = grade(fixture, tree)
+    assert result.hazard_results["H-CALLSITE"] != "pass", result.hazard_results
+    assert "exit status" in (result.error or ""), result.error

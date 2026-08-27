@@ -7,7 +7,7 @@ was well covered; what guarded its OUTPUTS was not.
 
 import pytest
 
-from eval import Accounting, allowed_scope, must_read
+from eval import Accounting, allowed_scope, excluded_paths, must_read
 from harness.fixture import load_fixture
 
 FIXTURE = "fixtures/py-callsite-01"
@@ -38,10 +38,14 @@ def test_excluded_paths_are_never_in_scope(fixture):
     model and the hazard declarations used to be connected only through
     call_sites, so the observation and the grader measured 'out of scope' by
     two unrelated definitions."""
-    scope = allowed_scope(fixture)
-    for hazard in fixture.hazards:
-        for path in hazard.get("excluded_paths") or []:
-            assert path not in scope
+    excluded = excluded_paths(fixture)
+    assert "notifications/digest.py" in excluded
+    # Applied at match time, since scope entries match as directory prefixes.
+    from harness.snapshot import Changes
+    changed = Changes(set(), {"notifications/digest.py"}, set())
+    assert changed.outside(allowed_scope(fixture), excluded) == {
+        "notifications/digest.py"
+    }
 
 
 def test_must_read_is_the_declared_call_sites(fixture):

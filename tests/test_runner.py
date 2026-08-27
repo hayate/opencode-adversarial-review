@@ -7,6 +7,7 @@ import pytest
 
 from harness.runner import (
     ARMS,
+    NONINTERACTIVE_PERMISSION,
     STERILE_ENV,
     ModelMismatch,
     assert_sterile,
@@ -130,11 +131,11 @@ def test_a_clean_exit_with_a_verified_session_completes():
 def test_a_missing_exit_code_does_not_invalidate_a_good_run():
     """Absent is not non-zero: an older report or a container that died before
     writing the file must not retroactively invalidate a graded run."""
-    status, _ = classify_run(
-        capped=True, turns=99, opencode_exit=None,
+    status, error = classify_run(
+        capped=False, turns=8, opencode_exit=None,
         session=EXPORT, expected_model=EXPORT["messages"][1]["info"]["modelID"],
     )
-    assert status == "capped"
+    assert status == "completed", error
 
 
 def test_capping_takes_precedence_over_the_exit_code():
@@ -154,3 +155,39 @@ def test_no_permission_is_left_asking_inside_the_container():
     effective = effective_permissions("localhost/odr-agent:latest")
     asking = {k: v for k, v in effective.items() if v == "ask"}
     assert asking == {}, f"permissions still gated with no human to answer: {asking}"
+
+
+def test_assert_sterile_actually_fails_when_a_permission_is_regated(monkeypatch):
+    """A negative control for the guard, not just the property. On a compliant
+    image assert_sterile passes whether or not the check exists, so deleting it
+    returned the code silently to the pre-fix state."""
+    import json as _json
+
+    weakened = dict(NONINTERACTIVE_PERMISSION)
+    weakened.pop("doom_loop")
+    weakened.pop("external_directory")
+    monkeypatch.setitem(STERILE_ENV, "OPENCODE_PERMISSION", _json.dumps(weakened))
+    with pytest.raises(AssertionError, match="gated"):
+        assert_sterile("localhost/odr-agent:latest")
+
+
+def test_run_agent_enforces_the_container_manifest_before_spending(monkeypatch, tmp_path):
+    """Pins the CALL SITE, not just the function. Round 1 found two guards with
+    zero callers; wiring one in is only half the fix if nothing notices the
+    wire being cut."""
+    import harness.runner as runner
+    from harness.fixture import load_fixture
+
+    class Tripped(Exception):
+        pass
+
+    def _tripwire(*args, **kwargs):
+        raise Tripped("container manifest check reached")
+
+    monkeypatch.setattr(runner, "assert_container_manifest", _tripwire)
+    fixture = load_fixture("fixtures/py-callsite-01")
+    with pytest.raises(Tripped):
+        runner.run_agent(
+            fixture, ARMS["deepseek"], "not-a-real-key", tmp_path / "work",
+            wall_clock_s=5, max_turns=1,
+        )
