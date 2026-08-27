@@ -224,15 +224,27 @@ def validate_hazard_mapping(fixture: Fixture) -> None:
         )
 
 
+def _error(test: dict) -> bool:
+    """A fixture that could not build.
+
+    pytest-json-report records this as TEST-level "error" while the setup
+    STAGE reads "failed" - never "error". Three sites here read the stage dict
+    for "error", so all three tested a value that never appears: this guard was
+    dead code, the exit-status cross-check ignored setup failures entirely, and
+    interpret_report's setup_broken never fired, which left a hazard censored
+    by a fixture exception with no cause - and therefore counted nowhere.
+    """
+    return test.get("outcome") == "error"
+
+
 def _classify(test: dict) -> str:
     """A hazard failure is an assertion in the CALL phase.
 
     A setup or teardown error is infrastructure - a broken conftest, a fixture
     that could not build - and says nothing about the model.
     """
-    for phase in ("setup", "teardown"):
-        if (test.get(phase) or {}).get("outcome") == "error":
-            return "invalid"
+    if _error(test):
+        return "invalid"
     outcome = (test.get("call") or {}).get("outcome")
     if outcome == "passed":
         return "pass"
@@ -265,8 +277,11 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
 
         report_path = out / "report.json"
         if result.timed_out:
-            # The grader itself is fixed and fast; a timeout here is model code
-            # hanging on import or at module scope.
+            # A timeout here is model code hanging - on import, at module
+            # scope, or in a subprocess an out-of-process grader drives.
+            # Per-call budgets inside a grader must compose to less than
+            # this cap, or which verdict a hang produces depends on how
+            # many inputs it hangs on.
             return _all_invalid(fixture, "grader timed out", MODEL_OUTPUT)
         if not report_path.exists():
             # Distinguish "pytest ran and could not get started against this
@@ -309,10 +324,8 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
                 MODEL_OUTPUT if exit_code in (2, 3, 4, 5) else HARNESS,
             )
         any_failed = any(
-            (t.get("call") or {}).get("outcome") == "failed"
-            or (t.get(p2) or {}).get("outcome") == "error"
+            (t.get("call") or {}).get("outcome") == "failed" or _error(t)
             for t in report.get("tests", [])
-            for p2 in ("setup", "teardown")
         )
         if (exit_code == 1) != any_failed:
             return _all_invalid(
@@ -337,11 +350,7 @@ def interpret_report(fixture: Fixture, report: dict) -> GradeResult:
     # the cause is subject code - and attributing it to the harness would
     # silently resample exactly the catastrophic runs the tri-state exists to
     # keep visible.
-    setup_broken = any(
-        (t.get(phase) or {}).get("outcome") == "error"
-        for t in reported
-        for phase in ("setup", "teardown")
-    )
+    setup_broken = any(_error(t) for t in reported)
     # A SKIPPED hazard is censoring, and censoring must be counted or it is
     # silent. A fixture may skip a hazard it cannot observe - py-callsite-02's
     # guards skip when the subject does not run at all, so one defect cannot
@@ -356,7 +365,9 @@ def interpret_report(fixture: Fixture, report: dict) -> GradeResult:
     # cases below: an over-counted ungradable rate is visible, silent censoring
     # is not.
     censored = any(
-        (t.get("setup") or {}).get("outcome") == "skipped" for t in reported
+        (t.get(phase) or {}).get("outcome") == "skipped"
+        for t in reported
+        for phase in ("setup", "call")
     )
     by_nodeid = {t["nodeid"]: t for t in reported}
     results: dict[str, str] = {}

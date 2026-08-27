@@ -13,14 +13,14 @@ LEGACY_ROW = ("C-9", "2026-09-01", "9500")
 
 
 def test_a_contract_without_a_currency_renders_exactly_as_before(
-    run_pricing, lines_starting, observable_or_skip
+    run_pricing, lines_starting, render_observable_or_skip
 ):
     result = run_pricing([LEGACY_ROW])
     assert lines_starting(result, "WARN") == [UNCHANGED], result.stdout
 
 
 def test_a_contract_without_a_currency_does_not_crash(
-    run_pricing, observable_or_skip
+    run_pricing, render_observable_or_skip
 ):
     result = run_pricing([LEGACY_ROW])
     assert result.returncode == 0, result.stderr

@@ -340,3 +340,55 @@ def test_a_censored_hazard_is_attributed_to_the_model_not_dropped(fixture):
     assert result.cause == "model_output", (
         "a skipped hazard with no cause increments nothing in record_grade"
     )
+
+
+def _report_for(fixture, broken_hazard, phase_outcome):
+    """A complete report: one hazard in the given state, the rest failing."""
+    def entry(nodeid, broken):
+        if broken:
+            return dict({"nodeid": nodeid, "call": None,
+                         "teardown": {"outcome": "passed"}}, **phase_outcome)
+        return {"nodeid": nodeid, "setup": {"outcome": "passed"},
+                "call": {"outcome": "failed"}, "teardown": {"outcome": "passed"}}
+
+    return {"tests": [
+        entry(nodeid, hazard["id"] == broken_hazard)
+        for hazard in fixture.hazards
+        for nodeid in hazard["tests"]
+    ]}
+
+
+def test_a_fixture_error_is_attributed_to_the_model(fixture):
+    """pytest-json-report writes a fixture failure as TEST-level "error", with
+    the setup STAGE reading "failed".
+
+    Three sites read the stage dict for "error" instead - _classify's guard
+    (dead code, the correct verdict arrives via the call-is-None fallthrough),
+    `any_failed` in grade (so the exit-status cross-check, which is what makes
+    the report tamper-evident, ignored setup failures entirely), and
+    `setup_broken` here. The last one meant a hazard censored by a fixture
+    EXCEPTION got cause None, and record_grade then increments nothing for it -
+    the same silent-censoring bug fixed for the "skipped" path four lines
+    below, still live on the "error" path above it.
+    """
+    report = _report_for(
+        fixture, "H-EXCLUDED",
+        {"outcome": "error", "setup": {"outcome": "failed"}},
+    )
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-EXCLUDED"] == "invalid"
+    assert result.cause == "model_output"
+
+
+def test_a_skip_raised_during_the_call_phase_is_also_censoring(fixture):
+    """Censoring is not always raised from a fixture. py-callsite-02's
+    rendering probe skips from inside the test body when it cannot obtain a
+    variance, which lands on the call phase rather than on setup."""
+    report = _report_for(
+        fixture, "H-OPENQ",
+        {"outcome": "skipped", "setup": {"outcome": "passed"},
+         "call": {"outcome": "skipped"}},
+    )
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-OPENQ"] == "invalid"
+    assert result.cause == "model_output"
