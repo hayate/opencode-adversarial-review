@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { makeReviewContextTool } from "../src/tool.js"
+import { makeReviewContextTool, safelyToText } from "../src/tool.js"
 
 const exec = promisify(execFile)
 
@@ -88,6 +88,42 @@ test("git's own failure preserves partial stdout produced before the failure", a
   }
 })
 
+test("git-error with partial stdout puts the incompleteness notice at the head too", async () => {
+  // Finding 2, fix round 2: the head notice was verified present on the
+  // success path but nothing pinned it on the git-error-with-partial-stdout
+  // path - a guard nothing tests is a guard a future change can silently
+  // drop. Same fake-git-on-PATH technique as the test above, but this
+  // script emits enough stdout that a regression to tail-only placement
+  // would push the notice past the first 200 characters, the same way the
+  // success-path test catches it.
+  const binDir = await mkdtemp(join(tmpdir(), "arv-tool-fakegit-head-"))
+  const fakeGit = join(binDir, "git")
+  await writeFile(
+    fakeGit,
+    "#!/bin/sh\n" +
+      "printf 'partial-output-before-kill\\n'\n" +
+      "i=0\n" +
+      'while [ "$i" -lt 30 ]; do\n' +
+      "  printf 'padding-line-to-push-total-length-past-two-hundred-characters-%d\\n' \"$i\"\n" +
+      "  i=$((i + 1))\n" +
+      "done\n" +
+      "exit 1\n",
+  )
+  await chmod(fakeGit, 0o755)
+
+  const originalPath = process.env.PATH
+  process.env.PATH = `${binDir}:${originalPath}`
+  try {
+    const tool = makeReviewContextTool(tmpdir())
+    const output = await tool.execute({ mode: "status" }, {})
+    const text = String(output)
+    assert.match(text.slice(0, 200), /incomplete/i)
+    assert.match(text, /partial-output-before-kill/)
+  } finally {
+    process.env.PATH = originalPath
+  }
+})
+
 test("a successful but truncated read puts the incompleteness notice at the head, not just the tail", async () => {
   const dir = await fixtureRepo()
   await writeFile(join(dir, "big.txt"), "x".repeat(300000) + "\n")
@@ -132,27 +168,62 @@ test("a non-iterable paths value returns an explanatory message, not a throw", a
   }
 })
 
-// --- Fix round 1: the tool must never throw, even for a bug two modules
-// down that this test cannot construct through real inputs. `runGit` is
-// injectable precisely so this can be tested directly, rather than trusted
-// on the strength of git-args.js's own validation being complete. ---
+// --- Fix round 2: the "runGit throws something unexpected" guarantee is
+// reachable through the real production path - execute() -> runGit() ->
+// buildGitArgs() - without any test-only injection seam. A getter that
+// throws on access, and a Proxy that throws on any property access, both
+// make buildGitArgs's plain property reads (`request?.mode`, `request.paths
+// ?? []`) raise a non-GitRequestError synchronously, which is exactly the
+// shape safelyToText exists to catch. These exercise the real call chain
+// end to end. ---
 
-test("execute never throws even if runGit itself throws unexpectedly", async () => {
+test("execute never throws when args.paths is a throwing getter", async () => {
   const dir = await fixtureRepo()
-  const boom = async () => {
-    throw new TypeError("boom from a hypothetical bug two modules down")
-  }
-  const tool = makeReviewContextTool(dir, { runGit: boom })
-  const output = await tool.execute({ mode: "diff" }, {})
+  const tool = makeReviewContextTool(dir)
+  const args = { mode: "diff" }
+  Object.defineProperty(args, "paths", {
+    enumerable: true,
+    get() {
+      throw new TypeError("boom from a throwing paths getter")
+    },
+  })
+  const output = await tool.execute(args, {})
   assert.match(String(output), /unexpected/i)
-  assert.match(String(output), /boom from a hypothetical bug two modules down/)
+  assert.match(String(output), /boom from a throwing paths getter/)
 })
 
-test("execute never throws even if runGit rejects instead of resolving", async () => {
+test("execute never throws when args itself is a proxy that throws on property access", async () => {
   const dir = await fixtureRepo()
-  const boom = () => Promise.reject(new Error("rejected, not thrown"))
-  const tool = makeReviewContextTool(dir, { runGit: boom })
-  const output = await tool.execute({ mode: "diff" }, {})
+  const tool = makeReviewContextTool(dir)
+  const args = new Proxy(
+    {},
+    {
+      get() {
+        throw new TypeError("boom from a proxy trap")
+      },
+    },
+  )
+  const output = await tool.execute(args, {})
+  assert.match(String(output), /unexpected/i)
+  assert.match(String(output), /boom from a proxy trap/)
+})
+
+// --- Fix round 2: safelyToText is tested directly against a thunk that
+// throws and one that rejects, replacing the round-1 tests that reached the
+// same code through an injected runGit. makeReviewContextTool takes only
+// `directory` again - the seam added no coverage that these two, plus the
+// two behavioural tests above, do not already provide. ---
+
+test("safelyToText returns an explanatory message when the operation throws synchronously", async () => {
+  const output = await safelyToText(() => {
+    throw new TypeError("boom from a thunk that throws")
+  })
+  assert.match(String(output), /unexpected/i)
+  assert.match(String(output), /boom from a thunk that throws/)
+})
+
+test("safelyToText returns an explanatory message when the operation's promise rejects", async () => {
+  const output = await safelyToText(() => Promise.reject(new Error("rejected, not thrown")))
   assert.match(String(output), /unexpected/i)
   assert.match(String(output), /rejected, not thrown/)
 })

@@ -1,5 +1,5 @@
 import { tool } from "@opencode-ai/plugin/tool"
-import { runGit as defaultRunGit } from "./git-run.js"
+import { runGit } from "./git-run.js"
 
 const DESCRIPTION = [
   "Read repository history and diffs for review.",
@@ -82,7 +82,30 @@ function toText(result) {
   return result.truncated ? `${TRUNCATION_HEAD}${body}${TRUNCATION_TAIL}` : body
 }
 
-export function makeReviewContextTool(directory, { runGit = defaultRunGit } = {}) {
+// This tool's contract is that it always returns text to the model, never
+// throws. Do not rely on git-args.js's validation being exhaustive to
+// guarantee that on its own - guarantee it here, at the boundary the model
+// actually sees, so a bug two modules down (or in some future mode this
+// tool grows) degrades to an error message instead of an unhandled
+// rejection.
+//
+// Exported as a standalone function taking a thunk - rather than widening
+// makeReviewContextTool's signature with an injectable runGit - so this
+// guarantee is directly testable without adding a parameter whose only
+// production caller always passes the same value. The same move as
+// git-run.js's execOptions(cwd): extract the pure piece, test it
+// structurally, keep the public constructor to the one argument it needs.
+export async function safelyToText(operation) {
+  let result
+  try {
+    result = await operation()
+  } catch (error) {
+    return `Unexpected error while running git: ${error?.message ?? String(error)}`
+  }
+  return toText(result)
+}
+
+export function makeReviewContextTool(directory) {
   return tool({
     description: DESCRIPTION,
     args: {
@@ -101,19 +124,7 @@ export function makeReviewContextTool(directory, { runGit = defaultRunGit } = {}
     // carried extra keys, runGit's cwd argument below always comes from
     // this closure, never from args or context.
     async execute(args, _context) {
-      // This tool's contract is that it always returns text to the model,
-      // never throws. Do not rely on git-args.js's validation being
-      // exhaustive to guarantee that on its own - guarantee it here, at the
-      // boundary the model actually sees, so a bug two modules down (or in
-      // some future mode this tool grows) degrades to an error message
-      // instead of an unhandled rejection.
-      let result
-      try {
-        result = await runGit(args, directory)
-      } catch (error) {
-        return `Unexpected error while running git: ${error?.message ?? String(error)}`
-      }
-      return toText(result)
+      return safelyToText(() => runGit(args, directory))
     },
   })
 }
