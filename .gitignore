@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 containers/digests*
 *.egg-info/
+.superpowers/  # Per-plan SDD scratch (briefs, reports, diffs); deleted when plan completes
