@@ -28,9 +28,10 @@ before this file was written.
 ## Capture log
 
 Date: 2026-08-28. All commands run from the repo root unless shown with a
-`cd` into a scratch directory. Every command in this log was re-run on the
-capture date to confirm it still produces the output shown, immediately
-before this file was written.
+`cd` into a scratch directory. Most commands in this log were re-run on the
+capture date to confirm they still produce the output shown, immediately
+before this file was written - Step 4's negative-result command is the one
+exception, noted at the point it appears below.
 
 ### Step 1: write the probe
 
