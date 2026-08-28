@@ -39,13 +39,18 @@ test("a rejected request never reaches git", async () => {
   const dir = await fixtureRepo()
   const result = await runGit({ mode: "diff", base: "--output=pwned.txt" }, dir)
   assert.equal(result.ok, false)
+  assert.equal(result.cause, "refused")
   assert.match(result.stderr, /may not begin with a dash/)
   await assert.rejects(access(join(dir, "pwned.txt")), "the file must not exist")
 })
 
-test("a tracked file is never truncated by a read", async () => {
+test("a successful read leaves the tracked file untouched", async () => {
   const dir = await fixtureRepo()
-  await runGit({ mode: "diff", base: "a.txt" }, dir).catch(() => {})
+  const result = await runGit({ mode: "diff", paths: ["a.txt"] }, dir)
+  assert.equal(result.ok, true)
+  assert.equal(result.cause, null)
+  assert.match(result.stdout, /-one/)
+  assert.match(result.stdout, /\+two/)
   assert.equal(await readFile(join(dir, "a.txt"), "utf8"), "two\n")
 })
 
@@ -53,7 +58,15 @@ test("git's own failure is reported, not thrown", async () => {
   const dir = await fixtureRepo()
   const result = await runGit({ mode: "show", ref: "no-such-ref" }, dir)
   assert.equal(result.ok, false)
+  assert.equal(result.cause, "git-error")
   assert.match(result.stderr, /no-such-ref/)
+})
+
+test("a broken environment is reported distinctly from a git failure", async () => {
+  const result = await runGit({ mode: "status" }, "/no/such/directory/at/all")
+  assert.equal(result.ok, false)
+  assert.equal(result.cause, "harness-error")
+  assert.match(result.stderr, /ENOENT/)
 })
 
 test("output beyond the cap is truncated and flagged", async () => {
@@ -61,6 +74,21 @@ test("output beyond the cap is truncated and flagged", async () => {
   await writeFile(join(dir, "big.txt"), "x".repeat(300000) + "\n")
   await exec("git", ["add", "."], { cwd: dir })
   const result = await runGit({ mode: "diff", ref: "HEAD" }, dir)
+  assert.equal(result.ok, true)
+  assert.equal(result.cause, null)
   assert.equal(result.truncated, true)
   assert.ok(result.stdout.length <= 200200)
+})
+
+test("output past the node maxBuffer is a successful truncated read, not a failure", async () => {
+  const dir = await fixtureRepo()
+  await writeFile(join(dir, "huge.txt"), "x".repeat(1000000) + "\n")
+  await exec("git", ["add", "."], { cwd: dir })
+  const result = await runGit({ mode: "diff", ref: "HEAD" }, dir)
+  assert.equal(result.ok, true)
+  assert.equal(result.cause, "max-buffer")
+  assert.equal(result.truncated, true)
+  assert.ok(result.stdout.length <= 200200)
+  assert.match(result.stderr, /exceeded the buffer/)
+  assert.doesNotMatch(result.stderr, /maxBuffer length exceeded/)
 })
