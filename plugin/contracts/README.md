@@ -23,6 +23,11 @@ before this file was written.
 | How do plugin options (the `[path, options]` tuple form in `opencode.json`) arrive? | As the second argument to the exported plugin function, e.g. `options={"model":"anthropic/claude-opus-5"}`. A directory-loaded plugin (no tuple, no `plugin` config entry) gets `options=null`. |
 | What syntax does a command template use for arguments? | **`$ARGUMENTS`**, exactly as expected. Confirmed via `probe-arguments.js`: template `echo BEGIN $ARGUMENTS END` invoked with `hello world` produced the literal prompt `echo BEGIN "hello world" END` (opencode wraps a multi-word argument string in double quotes when substituting). |
 | How do you actually invoke a plugin-injected command from the CLI? | **`opencode run --command <name> <args...>`.** Typing `/name args` as the plain message to `opencode run "..."` does **not** invoke the command - it is sent as literal chat text to the default agent, which may or may not notice it looks like a command (observed both a plausible-looking echo and a flat "I don't recognize that command" from the same literal input on different runs). This is a real footgun: the intuitive one-shot invocation does not work. |
+| Does `chat.params` fire for a plugin-INJECTED subagent? | **Yes**, once per LLM request, carrying `agent` as that subagent's own name. Captured 2026-08-28 via `probe-chat-params.js`: `CHAT.PARAMS agent="probe-reviewer" model.providerID="deepseek" model.id="deepseek-v4-flash"`. Input keys are exactly `sessionID, agent, model, provider, message`. It also fires for `title`, `build` and every other agent in the session, so a check here MUST test agent membership or it breaks the user's whole install. |
+| How is the serving model spelled? | `model.providerID` plus **`model.id`** on `chat.params`. Note `chat.message` spells the same thing **`model.modelID`** - two different field names for one value, in this one version. Both observed in the same run. Code that reads only one will break on the other. |
+| Does throwing from `chat.params` actually stop the review? | **Yes, and loudly.** With `PROBE_THROW=1` the subagent fired `chat.params` once, threw, and produced no further requests (against six requests in the un-thrown run). The calling session's `task` tool part came back `"status":"error"`, `"output":null`, `"error":"Tool execution failed: Subagent failed (task_id: ses_...): PROBE-GUARD-TRIPPED: refusing this review"`, and the parent model relayed that message to the user. It is NOT swallowed, and NOT delivered as an empty-but-successful result. |
+| Can a subagent be invoked directly with `opencode run --agent <name>`? | **No.** `opencode run --agent probe-reviewer "say OK"` prints `! agent "probe-reviewer" is a subagent, not a primary agent. Falling back to default agent` and runs `build` instead. Independent corroboration of ruling R18: `mode: "subagent"` is enforced by the platform, not merely advertised. |
+| Does `--command` work when the project `opencode.json` overrides `provider`/`enabled_providers`? | **Not observed to.** Three runs with a project-level `provider` override hung past 90-150s with only `LOADED` and `CONFIG HOOK FIRED` in the log - no `command.execute.before`, no `chat.message`, no `chat.params`. The same probe with a minimal `{"$schema":...}` config ran the command to completion in seconds. Cause not isolated; recorded so the next probe does not lose an hour to it. Use a minimal project config when probing the command path. |
 | What does the calling session receive when a subagent's provider call fails mid-stream? | **Undetermined.** See `probe-interrupt.md`. The brief's suggested cheap method (invalid `ANTHROPIC_API_KEY`) is silently ignored - opencode's stored `auth.json` credentials win over the env var, so the call succeeds for real (billed) instead of failing. Every method that did produce a genuinely broken provider config (bad `baseURL`, bad `apiKey` via the `config` hook, invalid model id) caused the CLI to hang for 60-110+ seconds with zero output, rather than raising a fast error. No run in this probe surfaced a clean error, a truncated message, or confirmed silence within the cost/time this task could spend. |
 
 ## Capture log
@@ -147,6 +152,68 @@ command tried.
 - `probe-injection.js` - the throwaway plugin used for Steps 2 and 3: does
   the `config` hook fire, do injected agent/command keys land in the
   resolved config, and do plugin options arrive.
+### Step 6: does chat.params fire for an injected subagent, and does a throw stop it
+
+Captured 2026-08-28. Question 1, the observation run:
+
+```
+P=$(mktemp -d); mkdir -p "$P/.opencode/plugin"
+cp plugin/contracts/probe-chat-params.js "$P/.opencode/plugin/"
+echo '{"$schema":"https://opencode.ai/config.json"}' > "$P/opencode.json"
+cd "$P" && PROBE_LOG=$P/probe.log ~/.opencode/bin/opencode run --command probe-reviewer "the login handler" --format json > out.txt
+cat "$P/probe.log"
+```
+
+Observed output:
+
+```
+LOADED options=null
+CONFIG HOOK FIRED
+COMMAND.EXECUTE.BEFORE command="probe-reviewer" args="\"the login handler\""
+CHAT.MESSAGE agent="build" model={"providerID":"deepseek","modelID":"deepseek-v4-pro"}
+CHAT.MESSAGE agent="probe-reviewer" model={"modelID":"deepseek-v4-flash","providerID":"deepseek"}
+CHAT.PARAMS agent="title" model.providerID="deepseek" model.id="deepseek-v4-flash" provider="deepseek" inputKeys=["sessionID","agent","model","provider","message"]
+CHAT.PARAMS agent="probe-reviewer" model.providerID="deepseek" model.id="deepseek-v4-flash" ...   (x6)
+CHAT.PARAMS agent="build" model.providerID="deepseek" model.id="deepseek-v4-pro" ...              (x2)
+```
+
+Note the two spellings of the model id in that single log: `chat.message`
+reports `modelID`, `chat.params` reports `id`.
+
+Question 2, the same command with `PROBE_THROW=1`:
+
+```
+cd "$P" && PROBE_LOG=$P/probe2.log PROBE_THROW=1 ~/.opencode/bin/opencode run --command probe-reviewer "the login handler" --format json > out2.txt
+```
+
+The `probe-reviewer` line appears ONCE, followed by `THROWING NOW`, then
+control returns to `build` - against six `probe-reviewer` requests in the run
+above. The `task` tool part in `out2.txt`:
+
+```
+"status":"error"
+"output":null
+"error":"Tool execution failed: Subagent failed (task_id: ses_fb73e0756ffeyvyLgdDgoUOEnR): PROBE-GUARD-TRIPPED: refusing this review"
+```
+
+and the parent's final text began `The probe-reviewer subagent refused to run,
+returning PROBE-GUARD-TRIPPED: refusing this review.`
+
+Negative results from the same step, recorded so they are not re-derived:
+
+- Pointing the provider `baseURL` at a dead port (`http://127.0.0.1:9/dead`)
+  to make the probe free does work for a PLAIN message - `chat.params` fires
+  for `title` and `build` before the HTTP call, then the SDK retries five
+  times and the CLI hangs. It does NOT work for `--command`, which never got
+  past `CONFIG HOOK FIRED` in three attempts (90s, 120s, 150s).
+- `opencode run --agent <subagent-name>` cannot be used to reach an injected
+  subagent cheaply: opencode refuses and silently falls back to the default
+  agent.
+
+- `probe-chat-params.js` - the Step 6 probe. Logs `command.execute.before`,
+  `chat.message` and `chat.params`, and throws from `chat.params` when
+  `PROBE_THROW=1` is set, to test whether a guard there actually stops a
+  review and what the caller receives.
 - `probe-arguments.js` - a copy of the injection probe with the injected
   command template changed to `echo BEGIN $ARGUMENTS END` and bound to
   `deepseek/deepseek-v4-flash` (the cheapest configured model on this
@@ -179,6 +246,15 @@ release with no changelog entry:
   this machine, with `opencode auth login` already run, it did not.
 - What a calling session receives on a genuinely broken provider call.
   Unverified either way - see the limits below.
+- That `chat.params` fires at all for a plugin-injected subagent, that its
+  `agent` field carries that subagent's own name, and that it fires once per
+  LLM request rather than once per review.
+- That `chat.params` spells the model id `model.id` while `chat.message`
+  spells the same value `model.modelID`, in one version.
+- That a throw from `chat.params` aborts the subagent and reaches the caller
+  as a `task` part with `status: "error"` and the thrown message attached.
+- That `opencode run --agent <name>` silently downgrades to the default agent
+  when the named agent is a subagent, rather than failing.
 
 ## Limits of this probe
 
@@ -196,6 +272,13 @@ release with no changelog entry:
   not defense-in-depth - there is no verified guarantee that a broken
   subagent call surfaces to the calling session as a clean, promptly
   delivered error.
+- Step 6 does **not** close Step 5, and must not be read as doing so. It
+  shows that one specific subagent failure - a plugin hook throwing - is
+  delivered to the caller as a named `status: "error"`. A provider call
+  dying mid-stream is a different failure at a different layer, and the
+  hang behaviour recorded in `probe-interrupt.md` is still the only
+  evidence about it. Step 6 makes the good outcome look more likely; it
+  does not make it verified, and the completion marker stays load-bearing.
 - These probes were run against this one machine's opencode installation,
   with this machine's global `~/.config/opencode/opencode.jsonc` merged in
   (providers `deepseek` and `anthropic`, model whitelist, per-agent model
