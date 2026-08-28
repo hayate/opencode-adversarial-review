@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { runGit } from "../src/git-run.js"
+import { runGit, execOptions, MAX_OUTPUT, TIMEOUT_MS } from "../src/git-run.js"
 
 const exec = promisify(execFile)
 
@@ -91,4 +91,28 @@ test("output past the node maxBuffer is a successful truncated read, not a failu
   assert.ok(result.stdout.length <= 200200)
   assert.match(result.stderr, /exceeded the buffer/)
   assert.doesNotMatch(result.stderr, /maxBuffer length exceeded/)
+})
+
+// The three tests below are structural, not behavioural: they assert that
+// the right options reach execFile, not that a kill actually happens under
+// process boundaries. A real behavioural test for the SIGKILL escalation
+// would have to wait out the real TIMEOUT_MS to observe the bound, which we
+// do not want in this suite. The realistic regression these guard against is
+// deletion of a line (dropping killSignal, or spreading ...process.env back
+// in), not a change to Node's own signal semantics - which is exactly what a
+// structural check on the options object catches.
+test("execOptions sets killSignal to SIGKILL, not the SIGTERM default", () => {
+  const options = execOptions("/some/dir")
+  assert.equal(options.killSignal, "SIGKILL")
+})
+
+test("execOptions passes only PATH, HOME and GIT_TERMINAL_PROMPT through", () => {
+  const options = execOptions("/some/dir")
+  assert.deepEqual(Object.keys(options.env).sort(), ["GIT_TERMINAL_PROMPT", "HOME", "PATH"])
+})
+
+test("execOptions pins timeout and maxBuffer to the module's own constants", () => {
+  const options = execOptions("/some/dir")
+  assert.equal(options.timeout, TIMEOUT_MS)
+  assert.equal(options.maxBuffer, MAX_OUTPUT * 4)
 })
