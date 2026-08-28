@@ -2,30 +2,46 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { buildGitArgs, GitRequestError } from "../src/git-args.js"
 
+// Every invocation carries harness-supplied config that shuts off the one
+// repository-config program-execution vector the diff flags did not already
+// cover. Written as a helper so the assertions below stay about the argv this
+// module builds, not about the prefix.
+const HARDENED = (...rest) => ["-c", "core.fsmonitor=", ...rest]
+
+test("every mode carries the fsmonitor hardening, or a repository can run a program during a read", () => {
+  for (const request of [
+    { mode: "diff" }, { mode: "log" }, { mode: "show", ref: "HEAD" },
+    { mode: "status" }, { mode: "files" },
+  ]) {
+    const args = buildGitArgs(request)
+    assert.deepEqual(args.slice(0, 2), ["-c", "core.fsmonitor="], `${request.mode} is unhardened`)
+  }
+})
+
 test("diff builds a safe argv with no-ext-diff and no-textconv", () => {
   assert.deepEqual(
     buildGitArgs({ mode: "diff", base: "main", head: "HEAD" }),
-    ["diff", "--no-ext-diff", "--no-textconv", "main...HEAD", "--"],
+    HARDENED("diff", "--no-ext-diff", "--no-textconv", "main...HEAD", "--"),
   )
 })
 
 test("paths are placed after the -- separator", () => {
   assert.deepEqual(
     buildGitArgs({ mode: "diff", base: "main", paths: ["src/a.js", "src/b.js"] }),
-    ["diff", "--no-ext-diff", "--no-textconv", "main", "--", "src/a.js", "src/b.js"],
+    HARDENED("diff", "--no-ext-diff", "--no-textconv", "main", "--", "src/a.js", "src/b.js"),
   )
 })
 
 test("log applies the limit as a bounded integer", () => {
   assert.deepEqual(
     buildGitArgs({ mode: "log", limit: 5 }),
-    ["log", "--no-ext-diff", "--no-textconv", "-n", "5", "--"],
+    HARDENED("log", "--no-ext-diff", "--no-textconv", "-n", "5", "--"),
   )
 })
 
 test("status and files take no diff options", () => {
-  assert.deepEqual(buildGitArgs({ mode: "status" }), ["status", "--porcelain"])
-  assert.deepEqual(buildGitArgs({ mode: "files" }), ["ls-files"])
+  assert.deepEqual(buildGitArgs({ mode: "status" }), HARDENED("status", "--porcelain"))
+  assert.deepEqual(buildGitArgs({ mode: "files" }), HARDENED("ls-files"))
 })
 
 for (const bad of [
@@ -86,7 +102,7 @@ test("ref combined with base is rejected", () => {
 test("base combined with a benign head produces a range", () => {
   assert.deepEqual(
     buildGitArgs({ mode: "diff", base: "main", head: "abc123" }),
-    ["diff", "--no-ext-diff", "--no-textconv", "main...abc123", "--"],
+    HARDENED("diff", "--no-ext-diff", "--no-textconv", "main...abc123", "--"),
   )
 })
 

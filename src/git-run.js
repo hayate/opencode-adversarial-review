@@ -26,7 +26,14 @@ export function execOptions(cwd) {
     // (for example a hostile core.fsmonitor in ~/.gitconfig) - that is
     // accepted because the model cannot influence HOME or its contents;
     // anyone who can write to it already owns the host.
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, GIT_TERMINAL_PROMPT: "0" },
+    // GIT_OPTIONAL_LOCKS=0 keeps git from taking locks or refreshing the index
+    // for operations that only read. A reviewer must not write to the tree it
+    // is reviewing. Stated honestly: a review claimed `git status` rewrites
+    // .git/index, and it could NOT be reproduced here - the index was
+    // byte-identical across runs. This is kept anyway because it is one env
+    // entry, it is exactly the documented switch for the concern, and the
+    // read-only guarantee is one we make publicly.
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
   }
 }
 
