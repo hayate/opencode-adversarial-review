@@ -88,13 +88,20 @@ test("git's own failure preserves partial stdout produced before the failure", a
   }
 })
 
-test("a successful but truncated read tells the model the output is incomplete", async () => {
+test("a successful but truncated read puts the incompleteness notice at the head, not just the tail", async () => {
   const dir = await fixtureRepo()
   await writeFile(join(dir, "big.txt"), "x".repeat(300000) + "\n")
   await exec("git", ["add", "."], { cwd: dir })
   const tool = makeReviewContextTool(dir)
   const output = await tool.execute({ mode: "diff", ref: "HEAD" }, {})
-  assert.match(String(output), /incomplete/i)
+  const text = String(output)
+  // A trailing-only marker is the first thing lost under a head-preserving
+  // truncation somewhere downstream (a UI cap, a context-window trim). A
+  // test that only checks presence anywhere in `text` would pass even with
+  // the notice stuck 200000 characters in, behind the whole diff - so this
+  // asserts it is within the first slice of the response, not merely
+  // somewhere in it.
+  assert.match(text.slice(0, 200), /incomplete/i)
 })
 
 test("an ordinary successful read carries no truncation notice", async () => {
@@ -112,4 +119,40 @@ test("per-call args cannot influence which directory git runs in", async () => {
   // supplies them anyway must not be able to redirect where git runs.
   const output = await tool.execute({ mode: "status", directory: elsewhere, cwd: elsewhere }, {})
   assert.match(String(output), /M a\.txt/)
+})
+
+// --- Fix round 1: a non-iterable paths must never escape as a raw throw ---
+
+test("a non-iterable paths value returns an explanatory message, not a throw", async () => {
+  const dir = await fixtureRepo()
+  const tool = makeReviewContextTool(dir)
+  for (const bad of [5, true, {}]) {
+    const output = await tool.execute({ mode: "diff", paths: bad }, {})
+    assert.match(String(output), /paths must be an array/i)
+  }
+})
+
+// --- Fix round 1: the tool must never throw, even for a bug two modules
+// down that this test cannot construct through real inputs. `runGit` is
+// injectable precisely so this can be tested directly, rather than trusted
+// on the strength of git-args.js's own validation being complete. ---
+
+test("execute never throws even if runGit itself throws unexpectedly", async () => {
+  const dir = await fixtureRepo()
+  const boom = async () => {
+    throw new TypeError("boom from a hypothetical bug two modules down")
+  }
+  const tool = makeReviewContextTool(dir, { runGit: boom })
+  const output = await tool.execute({ mode: "diff" }, {})
+  assert.match(String(output), /unexpected/i)
+  assert.match(String(output), /boom from a hypothetical bug two modules down/)
+})
+
+test("execute never throws even if runGit rejects instead of resolving", async () => {
+  const dir = await fixtureRepo()
+  const boom = () => Promise.reject(new Error("rejected, not thrown"))
+  const tool = makeReviewContextTool(dir, { runGit: boom })
+  const output = await tool.execute({ mode: "diff" }, {})
+  assert.match(String(output), /unexpected/i)
+  assert.match(String(output), /rejected, not thrown/)
 })

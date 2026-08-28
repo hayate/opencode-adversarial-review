@@ -62,7 +62,16 @@ export function buildGitArgs(request) {
     args.push(safeValue(request.ref, "ref"))
   }
 
+  // request.paths is model-supplied and every other field here is
+  // type-checked before use; this one previously was not. An array is the
+  // only shape `for...of` can iterate without throwing - a truthy
+  // non-iterable (a number, a boolean, a plain object) would otherwise
+  // escape as a raw TypeError instead of a GitRequestError, breaking the
+  // contract that a bad request is refused, never an unhandled throw.
+  const paths = request.paths ?? []
+  if (!Array.isArray(paths)) reject(`paths must be an array of strings`)
+
   args.push("--")
-  for (const path of request.paths ?? []) args.push(safePath(path))
+  for (const path of paths) args.push(safePath(path))
   return args
 }
