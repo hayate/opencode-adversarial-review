@@ -61,3 +61,45 @@ test("rejects a path escaping the repository", () => {
 test("rejects a NUL byte anywhere", () => {
   assert.throws(() => buildGitArgs({ mode: "diff", base: "main\u0000--output=x" }), GitRequestError)
 })
+
+test("head without base is rejected, not silently discarded", () => {
+  assert.throws(
+    () => buildGitArgs({ mode: "diff", head: "abc123" }),
+    (err) => err instanceof GitRequestError && /head requires base/i.test(err.message),
+  )
+})
+
+test("ref combined with head is rejected, not silently ignored", () => {
+  assert.throws(
+    () => buildGitArgs({ mode: "diff", head: "abc123", ref: "x" }),
+    (err) => err instanceof GitRequestError && /ref.*(cannot|may not) be combined with base or head/i.test(err.message),
+  )
+})
+
+test("ref combined with base is rejected", () => {
+  assert.throws(
+    () => buildGitArgs({ mode: "diff", base: "main", ref: "x" }),
+    (err) => err instanceof GitRequestError && /ref.*(cannot|may not) be combined with base or head/i.test(err.message),
+  )
+})
+
+test("base combined with a benign head produces a range", () => {
+  assert.deepEqual(
+    buildGitArgs({ mode: "diff", base: "main", head: "abc123" }),
+    ["diff", "--no-ext-diff", "--no-textconv", "main...abc123", "--"],
+  )
+})
+
+test("rejects when a later paths element is malicious", () => {
+  assert.throws(
+    () => buildGitArgs({ mode: "diff", paths: ["src/ok.js", "--output=/tmp/pwned"] }),
+    GitRequestError,
+  )
+})
+
+test("rejects mid-string upward traversal", () => {
+  assert.throws(
+    () => buildGitArgs({ mode: "diff", paths: ["src/../../etc/passwd"] }),
+    GitRequestError,
+  )
+})
