@@ -23,6 +23,10 @@ before this file was written.
 | How do plugin options (the `[path, options]` tuple form in `opencode.json`) arrive? | As the second argument to the exported plugin function, e.g. `options={"model":"anthropic/claude-opus-5"}`. A directory-loaded plugin (no tuple, no `plugin` config entry) gets `options=null`. |
 | What syntax does a command template use for arguments? | **`$ARGUMENTS`**, exactly as expected. Confirmed via `probe-arguments.js`: template `echo BEGIN $ARGUMENTS END` invoked with `hello world` produced the literal prompt `echo BEGIN "hello world" END` (opencode wraps a multi-word argument string in double quotes when substituting). |
 | How do you actually invoke a plugin-injected command from the CLI? | **`opencode run --command <name> <args...>`.** Typing `/name args` as the plain message to `opencode run "..."` does **not** invoke the command - it is sent as literal chat text to the default agent, which may or may not notice it looks like a command (observed both a plausible-looking echo and a flat "I don't recognize that command" from the same literal input on different runs). This is a real footgun: the intuitive one-shot invocation does not work. |
+| What does a user see when a plugin FAILS TO LOAD? | **Nothing.** `opencode debug config` exits 0 with empty stderr and the plugin's agents and commands simply absent. The reason is reachable only via `opencode debug config --print-logs --log-level ERROR`, which prints `level=ERROR message="failed to load plugin" path=... error="<the thrown message>"`. Captured 2026-08-28 with a deliberately invalid `model` option. |
+| What does a user see when the `config` hook THROWS? | **Nothing, and the whole hook is rolled back.** Same exit 0 / empty stderr. Verified twice: a CollisionError (thrown before any mutation) and a fingerprint failure (thrown *after* injectInto had already mutated the config). In the second case NEITHER agent nor command survived - opencode discards the entire hook's mutations on a throw. That is the safe direction: a failed install is never a half-install. |
+| Can a plugin write to the user's terminal from inside a hook? | **No.** Both `console.error(...)` and a raw `process.stderr.write(...)` immediately before a throw in the `config` hook produced zero bytes on stderr and appeared nowhere in stdout. A plugin has no channel to the user at config time. |
+| Does opencode's config schema accept a command with no `agent` and `subtask: false`? | **Yes.** Such a command lands in the resolved config intact, with `agent: null` and its `description` and `template` preserved. This is what makes a visible diagnostic possible at all: it is the one thing a plugin can leave behind that a user will actually see. |
 | Does `chat.params` fire for a plugin-INJECTED subagent? | **Yes**, once per LLM request, carrying `agent` as that subagent's own name. Captured 2026-08-28 via `probe-chat-params.js`: `CHAT.PARAMS agent="probe-reviewer" model.providerID="deepseek" model.id="deepseek-v4-flash"`. Input keys are exactly `sessionID, agent, model, provider, message`. It also fires for `title`, `build` and every other agent in the session, so a check here MUST test agent membership or it breaks the user's whole install. |
 | How is the serving model spelled? | `model.providerID` plus **`model.id`** on `chat.params`. Note `chat.message` spells the same thing **`model.modelID`** - two different field names for one value, in this one version. Both observed in the same run. Code that reads only one will break on the other. |
 | Does throwing from `chat.params` actually stop the review? | **Yes, and loudly.** With `PROBE_THROW=1` the subagent fired `chat.params` once, threw, and produced no further requests (against six requests in the un-thrown run). The calling session's `task` tool part came back `"status":"error"`, `"output":null`, `"error":"Tool execution failed: Subagent failed (task_id: ses_...): PROBE-GUARD-TRIPPED: refusing this review"`, and the parent model relayed that message to the user. It is NOT swallowed, and NOT delivered as an empty-but-successful result. |
@@ -214,6 +218,52 @@ Negative results from the same step, recorded so they are not re-derived:
   `chat.message` and `chat.params`, and throws from `chat.params` when
   `PROBE_THROW=1` is set, to test whether a guard there actually stops a
   review and what the caller receives.
+### Step 7: what a user actually sees when this plugin refuses to install
+
+Captured 2026-08-28. Three faults, each run twice - once plain, once with
+logging - from a scratch directory whose `opencode.json` points `plugin` at
+`plugin/src/index.js` (an absolute path; a path to `plugin/` itself also works,
+resolving through `main`).
+
+```
+cd "$P" && ~/.opencode/bin/opencode debug config > cfg.json 2>err.txt; echo $?
+cd "$P" && ~/.opencode/bin/opencode debug config --print-logs --log-level ERROR >/dev/null 2>logs.txt
+```
+
+| Fault | plain exit | plain stderr | agents installed | reason findable |
+|---|---|---|---|---|
+| `{"model":"opus"}` - options rejected at load | 0 | 0 bytes | none | only in `logs.txt` |
+| user already has an agent named `adversarial-review` | 0 | 0 bytes | none (user's own agent untouched) | only in `logs.txt` |
+| `verify.js` made to disagree with `inject.js` - throw AFTER mutation | 0 | 0 bytes | **none** - whole hook rolled back | only in `logs.txt` |
+
+The logged line for the first, verbatim:
+
+```
+level=ERROR message="failed to load plugin" path=file:///.../plugin/src/index.js error="opencode-adversarial-review: `model` must be provider/model, got \"opus\". Example: \"anthropic/claude-opus-5\""
+```
+
+A `console.error` and a `process.stderr.write` placed immediately before the
+throw both produced nothing, on either stream.
+
+**Consequence for this plugin.** Throwing is still correct - it fails closed,
+and the rollback means a failed install is never a partial one. But a throw
+alone is indistinguishable from the plugin not existing, which is the outcome
+spec 3.4 names as the worst available. `index.js` therefore catches the one
+fault a user causes by hand, a bad `model` value, and installs the two command
+names as agent-less diagnostics whose `description` and `template` carry the
+error. Confirmed present in the resolved config afterwards:
+
+```
+adversarial-review -> description "MISCONFIGURED - opencode-adversarial-review: `model` must be provider/model, got \"opus\"..."
+                      subtask False, agent None, no reviewer agent installed
+```
+
+Collisions and fingerprint failures are deliberately NOT given this treatment:
+a collision means the user's own agent owns the name and a diagnostic would be
+the overwrite we refuse on principle, and a fingerprint failure means
+`inject.js` and `verify.js` disagree, which is our own bug and fails the test
+suite long before a user sees it.
+
 - `probe-arguments.js` - a copy of the injection probe with the injected
   command template changed to `echo BEGIN $ARGUMENTS END` and bound to
   `deepseek/deepseek-v4-flash` (the cheapest configured model on this
@@ -255,6 +305,15 @@ release with no changelog entry:
   as a `task` part with `status: "error"` and the thrown message attached.
 - That `opencode run --agent <name>` silently downgrades to the default agent
   when the named agent is a subagent, rather than failing.
+- That plugin load errors and `config`-hook throws are swallowed entirely -
+  exit 0, empty stderr - and surface only under `--print-logs --log-level
+  ERROR`.
+- That a `config`-hook throw rolls back the whole hook's mutations, so a
+  failed install is never a partial one.
+- That a plugin cannot write to the user's terminal from inside a hook on
+  either stream.
+- That a command with no `agent` and `subtask: false` is accepted and
+  preserved by the config schema.
 
 ## Limits of this probe
 

@@ -1,5 +1,5 @@
 import { resolveOptions } from "./options.js"
-import { AGENTS, injectInto } from "./inject.js"
+import { AGENTS, COMMANDS, injectInto } from "./inject.js"
 import { fingerprint } from "./verify.js"
 import { makeReviewContextTool } from "./tool.js"
 
@@ -23,10 +23,68 @@ function servingModel(model) {
   return `${providerID}/${modelID}`
 }
 
+// opencode SWALLOWS both a plugin load error and a config-hook throw: exit 0,
+// empty stderr, the plugin simply absent, with the message reachable only via
+// `opencode debug config --print-logs --log-level ERROR`. console.error and a
+// raw process.stderr.write from inside a hook are swallowed too - the platform
+// gives a plugin no way to speak at config time at all. All verified against
+// 1.18.23 and recorded in plugin/contracts, Step 7.
+//
+// Failing closed is still right, and opencode helps: a throw makes it discard
+// the WHOLE hook's mutations, so there is never a half-installed reviewer. But
+// a throw alone produces exactly what spec 3.4 calls the worst available
+// outcome - a plugin that silently does nothing. So on the one fault a user can
+// actually cause by hand, a bad `model` value, we leave behind something that
+// speaks: the two command names, bound to no agent, whose template asks the
+// user's own session model to relay the error. `/adversarial-review` then says
+// what is wrong instead of "unknown command".
+//
+// This is deliberately NOT done for a collision or a fingerprint failure. A
+// collision means the user's own agent already owns the name and displacing it
+// with a diagnostic would be the overwrite we refuse on principle; a
+// fingerprint failure means inject.js and verify.js disagree, which is our own
+// bug and is caught by the test suite long before a user sees it.
+const diagnosticTemplate = (message) => [
+  "Relay the following to the user verbatim, and do nothing else. Do not read files,",
+  "do not run any command, and do not attempt a review:",
+  "",
+  message,
+  "",
+  "The opencode-adversarial-review plugin did not install because of that. Correct the",
+  "`model` value in the plugin's options in your opencode config, then restart opencode.",
+].join("\n")
+
+function misconfiguredHooks(error) {
+  return {
+    config: async (config) => {
+      // Same shapes injectInto refuses, refused the same way - except silently,
+      // because this path exists precisely because we cannot report anything.
+      if (config === null || typeof config !== "object" || Array.isArray(config)) return
+      if (config.command !== undefined && config.command !== null &&
+          (typeof config.command !== "object" || Array.isArray(config.command))) return
+      config.command = config.command ?? {}
+      for (const name of COMMANDS) {
+        // Never displace a command the user already has under that name.
+        if (config.command[name]) continue
+        config.command[name] = {
+          description: `MISCONFIGURED - ${error.message}`,
+          template: diagnosticTemplate(error.message),
+          subtask: false,
+        }
+      }
+    },
+  }
+}
+
 export const AdversarialReview = async (input, rawOptions) => {
   // Resolve options at LOAD time. A bad model reference discovered when the
   // user runs a review is a wasted round trip and a confusing error.
-  const options = resolveOptions(rawOptions)
+  let options
+  try {
+    options = resolveOptions(rawOptions)
+  } catch (error) {
+    return misconfiguredHooks(error)
+  }
 
   return {
     tool: {
