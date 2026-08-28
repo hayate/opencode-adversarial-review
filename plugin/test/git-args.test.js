@@ -103,3 +103,20 @@ test("rejects mid-string upward traversal", () => {
     GitRequestError,
   )
 })
+
+test("rejects a non-array paths value instead of throwing an unhandled TypeError", () => {
+  for (const bad of [5, true, {}, "src/a.js"]) {
+    assert.throws(
+      () => buildGitArgs({ mode: "diff", paths: bad }),
+      (err) => err instanceof GitRequestError && /paths must be an array/i.test(err.message),
+      `paths: ${JSON.stringify(bad)} should be rejected as a GitRequestError`,
+    )
+  }
+})
+
+test("rejects a non-string element inside an otherwise valid paths array", () => {
+  assert.throws(
+    () => buildGitArgs({ mode: "diff", paths: ["src/ok.js", 5] }),
+    GitRequestError,
+  )
+})
