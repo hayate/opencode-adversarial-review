@@ -78,16 +78,35 @@ Only `src/` is published; `test/` and `contracts/` stay in the repository.
 
 ## Install
 
-Clone this repository, then point opencode at it in your `opencode.jsonc`:
+Clone this repository, then add it to the `plugin` array in your
+`opencode.jsonc`:
 
 ```jsonc
 {
   "plugin": [
-    ["/absolute/path/to/opencode-adversarial-review",
-     { "model": "anthropic/claude-opus-5" }]
+    ["/absolute/path/to/opencode-adversarial-review", { "model": "anthropic/claude-opus-5" }]
   ]
 }
 ```
+
+**If you already have plugins, add this as another entry** - do not put it
+inside an existing one:
+
+```jsonc
+{
+  "plugin": [
+    "some-other-plugin",
+    "another@git+https://github.com/someone/another.git",
+    ["/absolute/path/to/opencode-adversarial-review", { "model": "anthropic/claude-opus-5" }]
+  ]
+}
+```
+
+The `plugin` array holds **entries**, and an entry is one of exactly two
+shapes: a plain string, or a two-element `[path, options]` tuple. The tuple is
+only how you attach options to one plugin. It is not a container: a third
+element does not add a second plugin, it is handed to the first one as an extra
+argument and the plugin you meant to add never loads. Order does not matter.
 
 The path may be the repository root (resolved through `main`) or
 `src/index.js` directly. Both were verified against opencode 1.18.23. Put it in
@@ -128,6 +147,8 @@ reach works:
 ["/path/to/opencode-adversarial-review", { "model": "deepseek/deepseek-v4-pro" }]
 ["/path/to/opencode-adversarial-review", { "model": "openai/gpt-5.4" }]
 ```
+
+Those are the entry, not the whole array. Keep your other entries alongside it.
 
 Your provider must be listed in `enabled_providers`, and the model must be
 selectable under `provider.<name>.whitelist` if you use one.
@@ -186,6 +207,7 @@ level=ERROR message="failed to load plugin" path=file:///.../src/index.js
 | `/adversarial-review` says **MISCONFIGURED** and relays an error instead of reviewing | Your `model` option is not a valid `provider/model` reference | Correct it in the plugin options and restart opencode |
 | The commands do not exist, and the log says `already exists and is not ours` | You already have an agent or command of that name; the plugin refuses to overwrite it | Rename yours, or remove the plugin |
 | The commands do not exist and there is no log line | opencode never loaded the plugin, usually a wrong path | Check the path resolves; try `src/index.js` explicitly |
+| opencode exits 1 with `Config file ... is not valid JSON(C)` | A syntax error, often a missing `]` closing the `[path, options]` tuple or a missing `,` after the `plugin` array | Unlike plugin failures this one is loud: it names the file and prints the input. See the two-shapes rule under [Install](#install) |
 | A review runs but on the wrong model | Should be impossible - the reviewer refuses at invocation if the serving model is not the configured one, naming both | If you see this, the check has a bug; please report it |
 
 A failed install is never a partial one. opencode discards the whole hook's
