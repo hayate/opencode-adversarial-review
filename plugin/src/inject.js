@@ -72,6 +72,26 @@ function assertValidContainer(config, key) {
   }
 }
 
+// The same failure one level up, and the worst-behaved of the three: if
+// `config` ITSELF is an array, both assertValidContainer calls read
+// config.agent / config.command as undefined and wave it through, the two
+// assignments below attach string-keyed properties to the array, and
+// JSON.stringify serialises it straight back to "[]" - both read-only
+// security agents gone, no error raised anywhere. Not reachable through
+// opencode's own contract, which always passes a plain object, but injectInto
+// is an exported entry point and this is the one shape whose failure is
+// completely silent. null and undefined are rejected here rather than
+// tolerated: unlike config.agent, there is no `?? {}` that could rescue them,
+// and mutating them is impossible.
+function assertValidRoot(config) {
+  if (config === null || config === undefined || typeof config !== "object" || Array.isArray(config)) {
+    throw new InvalidConfigError(
+      `opencode-adversarial-review: config must be a plain object, got ${Array.isArray(config) ? "an array" : typeof config === "object" ? String(config) : typeof config}. ` +
+      `Refusing to inject into a config shaped like that.`,
+    )
+  }
+}
+
 function assertNoCollision(config) {
   for (const name of AGENTS) {
     const existing = config.agent?.[name]
@@ -94,6 +114,7 @@ function assertNoCollision(config) {
 }
 
 export function injectInto(config, options) {
+  assertValidRoot(config)
   assertValidContainer(config, "agent")
   assertValidContainer(config, "command")
   assertNoCollision(config)
