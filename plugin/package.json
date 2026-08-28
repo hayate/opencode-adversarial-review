@@ -2,9 +2,15 @@
   "name": "opencode-adversarial-review",
   "version": "0.1.0",
   "private": true,
+  "//": "private:true is deliberate. It is the guard that makes `npm publish` impossible while this is being tested locally, and it is the ONLY line to remove when publishing. See the README section 'Installing it locally'.",
+  "description": "Adversarial code and design review for opencode, using a reviewer model you configure independently of your session model",
   "type": "module",
+  "main": "src/index.js",
+  "exports": { ".": "./src/index.js" },
+  "files": ["src"],
   "engines": { "node": ">=18.18" },
-  "devDependencies": {
-    "@opencode-ai/plugin": "1.18.21"
-  }
+  "license": "MIT",
+  "keywords": ["opencode", "opencode-plugin", "code-review", "adversarial-review"],
+  "scripts": { "test": "node --test test/*.test.js" },
+  "devDependencies": { "@opencode-ai/plugin": "1.18.21" }
 }

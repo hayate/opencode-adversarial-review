@@ -27,8 +27,64 @@ test("the config hook honours a configured model for both agents", async () => {
   assert.equal(config.agent["adversarial-review-design"].model, "deepseek/deepseek-v4-pro")
 })
 
-test("a bad model option fails loudly at load, not silently at review time", async () => {
-  await assert.rejects(() => AdversarialReview(input, { model: "opus" }), /provider\/model/)
+// MEASURED, not assumed (plugin/contracts Step 7): opencode swallows a plugin
+// load error entirely - exit 0, empty stderr, plugin absent. So rejecting here
+// would be honest about the function and useless to the user, who would get
+// "unknown command" and no reason. The plugin loads instead, and installs
+// something that can say what happened.
+test("a bad model option does NOT install a reviewer", async () => {
+  const hooks = await AdversarialReview(input, { model: "opus" })
+  const config = {}
+  await hooks.config(config)
+  assert.equal(config.agent, undefined, "no agent may be installed on a bad model option")
+  for (const name of AGENTS) assert.equal(config.command[name].subtask, false)
+})
+
+test("a bad model option installs a diagnostic under both command names", async () => {
+  const hooks = await AdversarialReview(input, { model: "opus" })
+  const config = {}
+  await hooks.config(config)
+  for (const name of AGENTS) {
+    const command = config.command[name]
+    assert.match(command.description, /MISCONFIGURED/)
+    assert.match(command.description, /provider\/model/)
+    assert.match(command.template, /provider\/model/)
+    assert.match(command.template, /"opus"/)
+    assert.match(command.template, /verbatim/)
+    assert.equal(command.agent, undefined, "a diagnostic must not bind to a reviewer agent")
+  }
+})
+
+test("a bad model option never displaces a command the user already has", async () => {
+  const hooks = await AdversarialReview(input, { model: "opus" })
+  const mine = { description: "mine", template: "mine" }
+  const config = { command: { "adversarial-review": mine } }
+  await hooks.config(config)
+  assert.equal(config.command["adversarial-review"], mine)
+  assert.match(config.command["adversarial-review-design"].description, /MISCONFIGURED/)
+})
+
+test("the diagnostic path tolerates the config shapes injectInto refuses", async () => {
+  const hooks = await AdversarialReview(input, { model: "opus" })
+  // It cannot report anything, so it must not throw either - a throw here would
+  // take the whole plugin down for a shape that is not its business.
+  for (const bad of [null, undefined, [], "oops", 7]) {
+    await hooks.config(bad)
+  }
+  const arrayCommand = { command: [] }
+  await hooks.config(arrayCommand)
+  assert.deepEqual(arrayCommand.command, [], "an array command container is left untouched")
+})
+
+test("a valid model installs the reviewer and no diagnostic", async () => {
+  const hooks = await AdversarialReview(input, { model: "deepseek/deepseek-v4-pro" })
+  const config = {}
+  await hooks.config(config)
+  for (const name of AGENTS) {
+    assert.ok(config.agent[name])
+    assert.equal(config.command[name].subtask, true)
+    assert.doesNotMatch(config.command[name].description, /MISCONFIGURED/)
+  }
 })
 
 test("a collision surfaces as an error from the config hook", async () => {
