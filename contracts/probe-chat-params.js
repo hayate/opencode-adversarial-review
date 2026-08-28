@@ -35,6 +35,12 @@ export const Probe = async (_input, options) => {
     },
     "command.execute.before": async (input) => {
       note(`COMMAND.EXECUTE.BEFORE command=${JSON.stringify(input.command)} args=${JSON.stringify(input.arguments)}`)
+      // Set PROBE_THROW_CMD=1 to answer: does throwing HERE abort the command,
+      // and what does the user see? A guard that cannot abort is not a guard.
+      if (process.env.PROBE_THROW_CMD && input.command === "probe-reviewer") {
+        note("THROWING FROM command.execute.before")
+        throw new Error("PROBE-CMD-GUARD-TRIPPED: refusing to run this command")
+      }
     },
     "chat.message": async (input) => {
       note(`CHAT.MESSAGE agent=${JSON.stringify(input.agent)} model=${JSON.stringify(input.model)}`)

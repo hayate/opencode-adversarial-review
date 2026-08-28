@@ -131,13 +131,60 @@ test("execOptions sets killSignal to SIGKILL, not the SIGTERM default", () => {
   assert.equal(options.killSignal, "SIGKILL")
 })
 
-test("execOptions passes only PATH, HOME and GIT_TERMINAL_PROMPT through", () => {
+test("execOptions passes only the four variables git is allowed to see", () => {
   const options = execOptions("/some/dir")
-  assert.deepEqual(Object.keys(options.env).sort(), ["GIT_TERMINAL_PROMPT", "HOME", "PATH"])
+  assert.deepEqual(
+    Object.keys(options.env).sort(),
+    ["GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT", "HOME", "PATH"],
+  )
+  // The point of the allowlist is what it EXCLUDES: GIT_EXTERNAL_DIFF and the
+  // GIT_CONFIG_* mechanism are the env-var routes to running a program.
+  assert.equal(options.env.GIT_OPTIONAL_LOCKS, "0")
+  assert.equal(options.env.GIT_EXTERNAL_DIFF, undefined)
 })
 
 test("execOptions pins timeout and maxBuffer to the module's own constants", () => {
   const options = execOptions("/some/dir")
   assert.equal(options.timeout, TIMEOUT_MS)
   assert.equal(options.maxBuffer, MAX_OUTPUT * 4)
+})
+
+// A repository's OWN .git/config can name programs that git executes during a
+// read. Verified against git in this environment: `core.fsmonitor` runs on
+// diff, status AND ls-files, so every mode is affected, and pruning the
+// environment does not touch it - the path comes from repository config, not
+// from an env var. The reviewer agent is denied bash precisely so it cannot run
+// programs; this would hand it one anyway, through git.
+//
+// `diff.external` and `diff.<driver>.textconv` are the same class and were
+// already closed by the --no-ext-diff and --no-textconv on the diff/log/show
+// argv. Confirmed by isolating each config: only fsmonitor got through.
+test("a repository-configured fsmonitor is never executed, on any mode", async () => {
+  const dir = await fixtureRepo()
+  const canary = join(dir, "canary.txt")
+  const script = join(dir, "fsmonitor.sh")
+  await writeFile(script, `#!/bin/sh\necho pwned >> ${canary}\nexit 1\n`)
+  await chmod(script, 0o755)
+  await exec("git", ["config", "core.fsmonitor", script], { cwd: dir })
+
+  for (const mode of ["diff", "log", "show", "status", "files"]) {
+    await runGit(mode === "show" ? { mode, ref: "HEAD" } : { mode }, dir)
+  }
+  await assert.rejects(
+    () => access(canary),
+    "core.fsmonitor was executed - the read-only guarantee does not hold",
+  )
+})
+
+test("a repository-configured diff.external is never executed", async () => {
+  const dir = await fixtureRepo()
+  const canary = join(dir, "canary.txt")
+  const script = join(dir, "ext.sh")
+  await writeFile(script, `#!/bin/sh\necho pwned >> ${canary}\nexit 1\n`)
+  await chmod(script, 0o755)
+  await exec("git", ["config", "diff.external", script], { cwd: dir })
+  for (const mode of ["diff", "log", "show"]) {
+    await runGit(mode === "show" ? { mode, ref: "HEAD" } : { mode }, dir)
+  }
+  await assert.rejects(() => access(canary), "diff.external was executed")
 })

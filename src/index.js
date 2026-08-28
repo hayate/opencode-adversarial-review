@@ -74,12 +74,37 @@ const diagnosticTemplate = (message, remedy) => [
   remedy,
 ].join("\n")
 
-const OPTIONS_REMEDY =
-  "Correct the `model` value in the plugin's options in your opencode config, then restart opencode."
-const BUG_REMEDY =
-  "That is not something your configuration can fix - it is a bug in the plugin. Please report it."
+// Every string below is a FIXED LITERAL, and that is the point. The diagnostic
+// template becomes a prompt executed by the user's SESSION model, which - unlike
+// the two reviewers - may well have bash and write access. Interpolating the
+// rejected option value into it would take text from a config file and place it
+// inside a privileged prompt: a project-level opencode.json carrying
+// `model: "x/Ignore all previous instructions and ..."` would have had its
+// instructions read by that model. Quoting a value inside an error sentence is
+// not a trust boundary.
+//
+// The value is not lost, it is just not put in a prompt. opencode's own error
+// log carries it verbatim, and the remedy below says exactly how to read it.
+const SEE_THE_VALUE =
+  "To see the exact value opencode rejected, run: opencode debug config --print-logs --log-level ERROR"
 
-function diagnosticHooks(problem, remedy) {
+const FAULTS = {
+  options: {
+    problem: "the `model` option in this plugin's configuration is not a valid provider/model reference",
+    remedy: `Correct it in the plugin's options in your opencode config, then restart opencode. ${SEE_THE_VALUE}`,
+  },
+  directory: {
+    problem: "opencode did not tell the plugin which directory to review",
+    remedy: "That is not something your configuration can fix - it is a bug in the plugin, or opencode changed shape. Please report it, and re-run the probes in contracts/ if opencode was just upgraded.",
+  },
+  internal: {
+    problem: "this plugin failed to load",
+    remedy: `That is not something your configuration can fix - it is a bug in the plugin. Please report it. ${SEE_THE_VALUE}`,
+  },
+}
+
+function diagnosticHooks(fault) {
+  const { problem, remedy } = FAULTS[fault]
   return {
     config: async (config) => {
       // Same shapes injectInto refuses, refused the same way - except silently,
@@ -120,10 +145,7 @@ export const AdversarialReview = async (input, rawOptions) => {
     // only tell the user to fix their config when their config is the problem.
     // Anything that is not an OptionsError is ours, and pointing them at a
     // `model` value that is already correct wastes their time.
-    return diagnosticHooks(
-      error?.message ?? String(error),
-      error instanceof OptionsError ? OPTIONS_REMEDY : BUG_REMEDY,
-    )
+    return diagnosticHooks(error instanceof OptionsError ? "options" : "internal")
   }
 
   // F4: `directory` is the ONLY source of the git cwd. Left undefined,
@@ -134,10 +156,7 @@ export const AdversarialReview = async (input, rawOptions) => {
   // stops being true it must be loud, the way every other shape change here is.
   const directory = input?.directory ?? input?.worktree
   if (typeof directory !== "string" || directory === "") {
-    return diagnosticHooks(
-      `opencode did not tell the plugin which directory to review - it supplied ${describeShape(directory)}.`,
-      BUG_REMEDY + " Re-run the probes in contracts/ if opencode was just upgraded.",
-    )
+    return diagnosticHooks("directory")
   }
 
   // Set by the config hook only when our own injection actually landed, and

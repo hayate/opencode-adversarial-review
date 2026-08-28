@@ -1,6 +1,28 @@
 export class GitRequestError extends Error {}
 
 const MODES = new Set(["diff", "log", "show", "status", "files"])
+
+// Harness-supplied config, prepended to every invocation. This is not a
+// model-supplied flag and does not weaken the "values, never options" rule
+// below - the model cannot reach it.
+//
+// A repository's OWN .git/config can name programs git executes during a READ.
+// `core.fsmonitor` is the one that got through: verified in this environment to
+// run on diff, status AND ls-files, so every mode was affected, and pruning the
+// environment does not touch it because the path comes from repository config
+// rather than from an env var. The reviewer agent is denied bash precisely so
+// it cannot execute programs; this handed it one anyway, through git.
+//
+// `diff.external` and `diff.<driver>.textconv` are the same class and were
+// already closed by the --no-ext-diff and --no-textconv below. Confirmed by
+// setting each config in isolation against the exact argv this builds: only
+// fsmonitor executed. Left as-is rather than duplicated here.
+//
+// Reachability, stated honestly: this needs an attacker-controlled .git/config
+// in the reviewed repository. `git clone` does not transfer config, so the
+// ordinary clone-and-review path was never exposed. A repository delivered as
+// an archive, a submodule, or any checkout someone else can write to was.
+const HARDENING = ["-c", "core.fsmonitor="]
 const MAX_LIMIT = 1000
 
 function reject(why) {
@@ -35,12 +57,12 @@ export function buildGitArgs(request) {
   const mode = request?.mode
   if (!MODES.has(mode)) reject(`unknown mode: ${String(mode)}`)
 
-  if (mode === "status") return ["status", "--porcelain"]
-  if (mode === "files") return ["ls-files"]
+  if (mode === "status") return [...HARDENING, "status", "--porcelain"]
+  if (mode === "files") return [...HARDENING, "ls-files"]
 
   // --no-ext-diff and --no-textconv stop a repository's own configuration from
   // executing a program during what is meant to be a read.
-  const args = [mode, "--no-ext-diff", "--no-textconv"]
+  const args = [...HARDENING, mode, "--no-ext-diff", "--no-textconv"]
 
   if (mode === "log" && request.limit !== undefined) {
     args.push("-n", safeLimit(request.limit))
