@@ -1,4 +1,4 @@
-import { resolveOptions } from "./options.js"
+import { OptionsError, resolveOptions } from "./options.js"
 import { AGENTS, COMMANDS, injectInto } from "./inject.js"
 import { fingerprint } from "./verify.js"
 import { makeReviewContextTool } from "./tool.js"
@@ -19,8 +19,28 @@ import { makeReviewContextTool } from "./tool.js"
 function servingModel(model) {
   const providerID = model?.providerID
   const modelID = model?.id ?? model?.modelID
-  if (typeof providerID !== "string" || typeof modelID !== "string") return null
+  // F7: an empty string passes a bare typeof check and concatenates to "/",
+  // which trips the MISMATCH branch and names the wrong cause. Route it to
+  // "cannot tell", which already carries the right guidance.
+  if (typeof providerID !== "string" || providerID === "") return null
+  if (typeof modelID !== "string" || modelID === "") return null
   return `${providerID}/${modelID}`
+}
+
+// JSON.stringify is wrong here twice over. It THROWS on a circular structure or
+// a BigInt - and this runs only in the branch where the model shape is already
+// unrecognisable, so those correlate - which would replace the one message the
+// user gets with a raw TypeError. And opencode's chat.params carries the FULL
+// provider model record (api, capabilities, cost, limits), so even on the happy
+// path it would paste a wall of JSON into an error meant to be read.
+function describeShape(value) {
+  if (value === null || typeof value !== "object") return typeof value === "string" ? `the string ${JSON.stringify(value)}` : String(value)
+  try {
+    const keys = Object.keys(value)
+    return keys.length ? `an object with keys ${keys.slice(0, 12).join(", ")}${keys.length > 12 ? ", ..." : ""}` : "an object with no keys"
+  } catch {
+    return "an object whose keys could not be read"
+  }
 }
 
 // opencode SWALLOWS both a plugin load error and a config-hook throw: exit 0,
@@ -44,17 +64,22 @@ function servingModel(model) {
 // with a diagnostic would be the overwrite we refuse on principle; a
 // fingerprint failure means inject.js and verify.js disagree, which is our own
 // bug and is caught by the test suite long before a user sees it.
-const diagnosticTemplate = (message) => [
+const diagnosticTemplate = (message, remedy) => [
   "Relay the following to the user verbatim, and do nothing else. Do not read files,",
   "do not run any command, and do not attempt a review:",
   "",
   message,
   "",
-  "The opencode-adversarial-review plugin did not install because of that. Correct the",
-  "`model` value in the plugin's options in your opencode config, then restart opencode.",
+  "The opencode-adversarial-review plugin did not install because of that.",
+  remedy,
 ].join("\n")
 
-function misconfiguredHooks(error) {
+const OPTIONS_REMEDY =
+  "Correct the `model` value in the plugin's options in your opencode config, then restart opencode."
+const BUG_REMEDY =
+  "That is not something your configuration can fix - it is a bug in the plugin. Please report it."
+
+function diagnosticHooks(problem, remedy) {
   return {
     config: async (config) => {
       // Same shapes injectInto refuses, refused the same way - except silently,
@@ -62,15 +87,23 @@ function misconfiguredHooks(error) {
       if (config === null || typeof config !== "object" || Array.isArray(config)) return
       if (config.command !== undefined && config.command !== null &&
           (typeof config.command !== "object" || Array.isArray(config.command))) return
-      config.command = config.command ?? {}
-      for (const name of COMMANDS) {
-        // Never displace a command the user already has under that name.
-        if (config.command[name]) continue
-        config.command[name] = {
-          description: `MISCONFIGURED - ${error.message}`,
-          template: diagnosticTemplate(error.message),
-          subtask: false,
+      // A frozen or read-only config would make the assignments below throw,
+      // which contradicts the whole point of this path: it exists to leave
+      // something behind when nothing else can be said, so it must never be the
+      // thing that fails. Stand down instead.
+      try {
+        config.command = config.command ?? {}
+        for (const name of COMMANDS) {
+          // Never displace a command the user already has under that name.
+          if (config.command[name]) continue
+          config.command[name] = {
+            description: `MISCONFIGURED - ${problem}`,
+            template: diagnosticTemplate(problem, remedy),
+            subtask: false,
+          }
         }
+      } catch {
+        // Nothing to report it to. See contracts/README.md Step 7.
       }
     },
   }
@@ -83,20 +116,59 @@ export const AdversarialReview = async (input, rawOptions) => {
   try {
     options = resolveOptions(rawOptions)
   } catch (error) {
-    return misconfiguredHooks(error)
+    // Catch everything - rethrowing would make the plugin vanish silently - but
+    // only tell the user to fix their config when their config is the problem.
+    // Anything that is not an OptionsError is ours, and pointing them at a
+    // `model` value that is already correct wastes their time.
+    return diagnosticHooks(
+      error?.message ?? String(error),
+      error instanceof OptionsError ? OPTIONS_REMEDY : BUG_REMEDY,
+    )
   }
+
+  // F4: `directory` is the ONLY source of the git cwd. Left undefined,
+  // execFile treats it as "inherit", and review_context silently reads whatever
+  // tree the opencode process happened to start in - reporting success. A review
+  // of the wrong tree reads exactly like a review of the right one, which is this
+  // plugin's own hazard class. opencode always supplies it today; if that ever
+  // stops being true it must be loud, the way every other shape change here is.
+  const directory = input?.directory ?? input?.worktree
+  if (typeof directory !== "string" || directory === "") {
+    return diagnosticHooks(
+      `opencode did not tell the plugin which directory to review - it supplied ${describeShape(directory)}.`,
+      BUG_REMEDY + " Re-run the probes in contracts/ if opencode was just upgraded.",
+    )
+  }
+
+  // Set by the config hook only when our own injection actually landed, and
+  // read by chat.params below. VERIFIED LIVE against opencode 1.18.23: a
+  // config-hook throw is logged and IGNORED, and every hook we returned stays
+  // registered and keeps firing. Without this flag, refusing to overwrite a
+  // user's same-named agent left us policing THEIR agent on their model, killing
+  // it on every invocation with an error that blamed the config hook for not
+  // applying - when it had applied and deliberately declined.
+  let installed = false
 
   return {
     tool: {
-      review_context: makeReviewContextTool(input.directory ?? input.worktree),
+      review_context: makeReviewContextTool(directory),
     },
 
     config: async (config) => {
+      // Withdrawn first, so any failure below leaves the guard without standing
+      // rather than leaving it armed over a name that is no longer ours.
+      installed = false
       injectInto(config, options)
 
-      // Verify what actually landed. This runs after our own mutation, so it
-      // catches a merge phase that overwrote our fields. It cannot catch the
-      // hook never firing at all - that is what chat.params below is for.
+      // Verify what actually landed. Be precise about what this does and does
+      // not cover, or a later maintainer will trust coverage that is not here.
+      // opencode runs plugin config hooks SEQUENTIALLY over one shared config
+      // object, and injectInto and fingerprint are synchronous with no await
+      // between them - so this cannot catch a later plugin mutating our agents
+      // after we return, and there is no merge phase for it to catch either.
+      // What it actually covers is exactly two things: inject.js and verify.js
+      // drifting apart, which is our own bug, and a config object that does not
+      // retain writes.
       const problems = fingerprint(config, options)
       if (problems.length > 0) {
         throw new Error(
@@ -105,6 +177,7 @@ export const AdversarialReview = async (input, rawOptions) => {
           "\nRefusing to continue rather than give you a reviewer that silently uses the wrong model.",
         )
       }
+      installed = true
     },
 
     // Spec 3.4's third check, and the only one that runs outside the config
@@ -118,6 +191,11 @@ export const AdversarialReview = async (input, rawOptions) => {
     // subagent and reaches the caller as `status: "error"` with this message
     // attached - not as an empty result that reads as a clean review.
     "chat.params": async (params) => {
+      // No injection of ours landed, so nothing wearing these names is ours to
+      // police. This is the whole of the collision case: the user owns the name,
+      // we declined it, and their agent is none of our business.
+      if (!installed) return
+
       // chat.params fires for title, build, summary and every other agent in
       // the session. Policing any of those would break the user's whole
       // opencode install the moment this plugin loads. Exact membership, not
@@ -128,7 +206,7 @@ export const AdversarialReview = async (input, rawOptions) => {
       if (serving === null) {
         throw new Error(
           `opencode-adversarial-review: cannot tell which model is about to serve "${params.agent}". ` +
-          `opencode reported ${JSON.stringify(params.model)}, which carries neither id nor modelID alongside providerID. ` +
+          `opencode reported ${describeShape(params.model)}, which carries no non-empty id or modelID alongside providerID. ` +
           `Refusing to run a review whose model cannot be verified. If opencode was just upgraded, this shape has ` +
           `changed and the plugin needs updating - re-run the probes in contracts/.`,
         )
