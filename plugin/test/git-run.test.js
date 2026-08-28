@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, writeFile, readFile, access } from "node:fs/promises"
+import { mkdtemp, writeFile, readFile, access, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
@@ -60,6 +60,31 @@ test("git's own failure is reported, not thrown", async () => {
   assert.equal(result.ok, false)
   assert.equal(result.cause, "git-error")
   assert.match(result.stderr, /no-such-ref/)
+})
+
+test("git-error preserves real stdout the process emitted before failing", async () => {
+  // A fake `git` on PATH stands in for the case the reviewer reproduced on
+  // the real binary: a process that streams legitimate output and then
+  // does not exit cleanly (there, killed by the timeout after producing
+  // output; here, a plain non-zero exit after producing output). Both hit
+  // the exact same branch in runGit, and that branch is what is under
+  // test - not the reason the process failed.
+  const binDir = await mkdtemp(join(tmpdir(), "arv-fakegit-"))
+  const fakeGit = join(binDir, "git")
+  await writeFile(fakeGit, "#!/bin/sh\nprintf 'partial-output-before-kill\\n'\nexit 1\n")
+  await chmod(fakeGit, 0o755)
+
+  const originalPath = process.env.PATH
+  process.env.PATH = `${binDir}:${originalPath}`
+  try {
+    const result = await runGit({ mode: "status" }, tmpdir())
+    assert.equal(result.ok, false)
+    assert.equal(result.cause, "git-error")
+    assert.equal(result.truncated, true)
+    assert.match(result.stdout, /partial-output-before-kill/)
+  } finally {
+    process.env.PATH = originalPath
+  }
 })
 
 test("a broken environment is reported distinctly from a git failure", async () => {
