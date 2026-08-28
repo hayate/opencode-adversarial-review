@@ -1,8 +1,34 @@
 import { execFile } from "node:child_process"
 import { buildGitArgs, GitRequestError } from "./git-args.js"
 
-const MAX_OUTPUT = 200000
-const TIMEOUT_MS = 20000
+export const MAX_OUTPUT = 200000
+export const TIMEOUT_MS = 20000
+
+// The execFile options as a small pure function, so the options object -
+// most importantly killSignal and the pruned env - can be asserted on
+// directly in tests without spawning a process. See the "structural, not
+// behavioural" tests in git-run.test.js for why that split exists.
+export function execOptions(cwd) {
+  return {
+    cwd,
+    timeout: TIMEOUT_MS,
+    // execFile's timeout sends SIGTERM by default, which a process can
+    // trap or ignore, leaving the promise to hang well past TIMEOUT_MS.
+    // These are read-only git commands, so there is nothing for a
+    // graceful shutdown to protect - escalate straight to SIGKILL so the
+    // timeout is an actual wall-clock bound.
+    killSignal: "SIGKILL",
+    maxBuffer: MAX_OUTPUT * 4,
+    windowsHide: true,
+    // A minimal environment. This blocks GIT_EXTERNAL_DIFF and the
+    // GIT_CONFIG_* env-var mechanism from reaching what is meant to be a
+    // read. It does NOT block file-based config reached through HOME
+    // (for example a hostile core.fsmonitor in ~/.gitconfig) - that is
+    // accepted because the model cannot influence HOME or its contents;
+    // anyone who can write to it already owns the host.
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, GIT_TERMINAL_PROMPT: "0" },
+  }
+}
 
 // execFile, never exec: no shell means no redirection, no substitution, no
 // chaining. The argv is built by buildGitArgs, so the model contributes values
@@ -32,25 +58,7 @@ export function runGit(request, cwd) {
     execFile(
       "git",
       args,
-      {
-        cwd,
-        timeout: TIMEOUT_MS,
-        // execFile's timeout sends SIGTERM by default, which a process can
-        // trap or ignore, leaving the promise to hang well past TIMEOUT_MS.
-        // These are read-only git commands, so there is nothing for a
-        // graceful shutdown to protect - escalate straight to SIGKILL so the
-        // timeout is an actual wall-clock bound.
-        killSignal: "SIGKILL",
-        maxBuffer: MAX_OUTPUT * 4,
-        windowsHide: true,
-        // A minimal environment. This blocks GIT_EXTERNAL_DIFF and the
-        // GIT_CONFIG_* env-var mechanism from reaching what is meant to be a
-        // read. It does NOT block file-based config reached through HOME
-        // (for example a hostile core.fsmonitor in ~/.gitconfig) - that is
-        // accepted because the model cannot influence HOME or its contents;
-        // anyone who can write to it already owns the host.
-        env: { PATH: process.env.PATH, HOME: process.env.HOME, GIT_TERMINAL_PROMPT: "0" },
-      },
+      execOptions(cwd),
       (error, stdout, stderr) => {
         if (!error) {
           const truncated = stdout.length > MAX_OUTPUT
