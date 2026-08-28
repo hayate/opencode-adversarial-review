@@ -44,7 +44,10 @@ NODE_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
 READ_COMMANDS = {"cat", "head", "tail", "less", "more", "bat", "nl", "od", "wc"}
 SEARCH_COMMANDS = {"grep", "rg", "ag", "ack"}
 
-_SEGMENT = re.compile(r"\s*(?:\|\||&&|;|\|)\s*")
+# A NEWLINE separates commands too. Without it a multi-line script was one
+# segment, so a script beginning `cat x` recorded every later command name
+# and argument as a read of that cat.
+_SEGMENT = re.compile(r"\s*(?:\|\||&&|;|\||\n)\s*")
 _ENV_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
@@ -114,7 +117,9 @@ def _strip_heredocs(command: str) -> str:
         # The operator itself is dropped with the body; what follows it on the
         # same line is still shell and is kept.
         line, _, body = rest[match.end():].partition("\n")
-        kept.append(line)
+        # The newline the body occupied is a command separator and must survive
+        # it, or the terminator glues `cat > feed.csv` onto the next line.
+        kept.append(line + "\n")
         for index, text in enumerate(body.split("\n")):
             # `<<-` permits a tab-indented terminator.
             if text.strip() == marker:

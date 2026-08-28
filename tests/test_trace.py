@@ -378,3 +378,50 @@ def test_a_redirect_is_not_an_argument_of_the_read_command(command, reads, edits
     )
     assert obs["read_paths"] == reads, command
     assert obs["edited_paths"] == edits, command
+
+
+# --- A newline separates commands; a stripped heredoc must not glue them ---
+
+
+def test_a_newline_separates_commands():
+    """_SEGMENT split on ||, &&, ; and | but NOT on a newline, so a multi-line
+    script collapsed into one segment.
+
+    When its first command was a read command, every LATER command name and
+    argument became a read path. The first opus n=3 run recorded read_paths
+    containing 'cat', 'cd', '.', 'sed', 'python', 'echo', a raw sed script and
+    a shell echo banner. Same class as the redirect artifacts: shell syntax
+    read as a filename, landing on whichever arm writes multi-line scripts more
+    often.
+    """
+    script = (
+        "cd /workspace\n"
+        "cat pricing/model.py\n"
+        "python -m pricing > out.txt\n"
+        "sed -i 's/a/b/' pricing/reconcile.py"
+    )
+    obs = observations(
+        _session(_bash(script)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert obs["read_paths"] == ["pricing/model.py"]
+    assert obs["edited_paths"] == ["out.txt", "pricing/reconcile.py"]
+
+
+def test_a_stripped_heredoc_does_not_glue_the_next_command_on():
+    """Removing the body must leave the line boundary behind.
+
+    Without it `cat > feed.csv` and the following `cd /workspace` became one
+    command, so `cd` and its argument were recorded as reads of the cat.
+    """
+    script = (
+        "cat > /tmp/opencode/feed.csv <<'CSV'\n"
+        "supplier,rate\n"
+        "CSV\n"
+        "cd /workspace\n"
+        "cat pricing/feeds.py"
+    )
+    obs = observations(
+        _session(_bash(script)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert obs["read_paths"] == ["pricing/feeds.py"]
+    assert "workspace" not in obs["read_paths"]
