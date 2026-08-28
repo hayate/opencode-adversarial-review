@@ -24,7 +24,16 @@ export const DESIGN_REVIEW_PROMPT = read("design-review.md")
 // instruction is the PRIMARY control against that failure mode; this
 // function is a secondary, best-effort check layered on top of it, not a
 // substitute for it. No last-line text heuristic can close this hole from
-// content alone; see the test suite for the documented case this misses.
+// content alone; the only genuine fix is the provider's own finish-reason
+// signal, which is outside this function's text-only input.
+//
+// Two tests pin this hole in prompts.test.js and must both be revisited
+// together if isComplete is ever strengthened: "a model that echoes the
+// marker early and is then cut off" (marker preceded by prose) and "a bare
+// marker with no preamble at all" (marker alone, nothing else). A change
+// that leaves both of those tests passing unchanged has not addressed the
+// general hole, only moved it - for example, requiring "more than a bare
+// marker" would fix the second case but not the first.
 export function isComplete(text) {
   if (typeof text !== "string") return false
   const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
