@@ -57,6 +57,16 @@ for the full design, including the visibility boundary that keeps the answer key
 away from the model under test, the sterile-configuration requirements, and the
 statistical rules governing what may be claimed.
 
+## Known limits
+
+The grader runs model-authored code in the same process that owns the result
+file, because its fixtures import the subject's modules. Accidental
+interference is closed - stray conftest files, model-authored pytest config,
+stale bytecode, plugin autoload and startup hooks are all blocked and tested -
+but a model that deliberately set out to forge its own grade could. Every
+number this harness produces is conditional on that not having happened, and
+the harness cannot prove it. See spec section 12.0.
+
 ## Licence
 
 MIT

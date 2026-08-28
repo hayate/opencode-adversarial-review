@@ -1,0 +1,45 @@
+{
+  "fixture": "py-callsite-01",
+  "n_target": 3,
+  "hazards": {
+    "H-CALLSITE": {
+      "deepseek": {
+        "failures": 0,
+        "valid_runs": 3,
+        "attempts": 3
+      },
+      "opus": {
+        "failures": 0,
+        "valid_runs": 3,
+        "attempts": 3
+      },
+      "bucket": "neither"
+    },
+    "H-EXCLUDED": {
+      "deepseek": {
+        "failures": 0,
+        "valid_runs": 3,
+        "attempts": 3
+      },
+      "opus": {
+        "failures": 0,
+        "valid_runs": 3,
+        "attempts": 3
+      },
+      "bucket": "neither"
+    },
+    "H-OPENQ": {
+      "deepseek": {
+        "failures": 0,
+        "valid_runs": 3,
+        "attempts": 3
+      },
+      "opus": {
+        "failures": 0,
+        "valid_runs": 3,
+        "attempts": 3
+      },
+      "bucket": "neither"
+    }
+  }
+}
