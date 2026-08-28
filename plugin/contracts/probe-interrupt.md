@@ -30,7 +30,7 @@ cd "$P" && ANTHROPIC_API_KEY=sk-invalid PROBE_LOG=$P/probe.log \
 
 Did not fail. opencode has its own credential store
 (`~/.local/share/opencode/auth.json`, populated by `opencode auth login`) and
-that store won that the env var. The subagent ran on real
+that store won over the env var. The subagent ran on real
 `anthropic/claude-opus-5` and returned a normal completed result:
 
 ```
