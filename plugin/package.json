@@ -1,0 +1,10 @@
+{
+  "name": "opencode-adversarial-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18.18" },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.21"
+  }
+}

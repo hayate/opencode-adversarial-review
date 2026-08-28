@@ -7,3 +7,4 @@ containers/digests*
 *.egg-info/
 # Per-plan SDD scratch (briefs, reports, diffs); deleted when the plan completes
 .superpowers/
+plugin/node_modules/
