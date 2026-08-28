@@ -5,9 +5,14 @@ review gauntlet found it had no tests at all. What guarded the harness's INPUTS
 was well covered; what guarded its OUTPUTS was not.
 """
 
+import argparse
+
 import pytest
 
+import eval as eval_module
+import graders.apply as apply_module
 from eval import Accounting, allowed_scope, excluded_paths, must_read
+from graders.apply import GradeResult
 from harness.fixture import load_fixture
 
 FIXTURE = "fixtures/py-callsite-01"
@@ -139,3 +144,64 @@ def test_a_hazard_stops_accumulating_once_it_reaches_n():
         acc.record_grade(_grade(**{"H-CALLSITE": "invalid"}), cause="model_output")
     assert acc.valid["H-EXCLUDED"] == 2, "denominator ran past the preregistered n"
     assert acc.failures["H-EXCLUDED"] == 0
+
+
+# --- The pre-spend gate must be REACHABLE, not just individually correct ---
+
+
+def _run_args(**overrides):
+    args = argparse.Namespace(
+        fixture="py-callsite-02", arms="deepseek", n=1,
+        wall_clock=60, max_turns=5,
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def test_run_command_runs_every_pre_spend_gate_before_the_credential_check(
+    monkeypatch,
+):
+    """`eval.py run` called validate_reference_solution without importing it.
+
+    Every gate in this sequence had its own passing test and the SEQUENCE had
+    none, so a NameError on the one code path that spends money survived a
+    green suite of 195 tests and three review rounds. A unit test that imports
+    a function from the module DEFINING it can never catch a caller that failed
+    to import it, and static review reads the call and the definition without
+    ever executing the import graph between them.
+
+    The container work is stubbed at `graders.apply.grade`, not at
+    `eval.validate_reference_solution`, so eval.py's own name lookup is the
+    thing under test rather than the thing mocked away.
+    """
+    called = []
+
+    def _graded(fixture, tree):
+        called.append("reference_solution")
+        return GradeResult({h["id"]: "pass" for h in fixture.hazards}, None)
+
+    def _never_spend(*args, **kwargs):
+        raise AssertionError("run_agent reached with the credential gate unmet")
+
+    monkeypatch.setattr(eval_module, "preflight", lambda: [])
+    monkeypatch.setattr(eval_module, "verify_image_digests", lambda images: [])
+    monkeypatch.setattr(
+        eval_module, "assert_sterile", lambda image: called.append("sterile")
+    )
+    monkeypatch.setattr(
+        eval_module,
+        "validate_hazard_mapping",
+        lambda fixture: called.append("hazard_mapping"),
+    )
+    monkeypatch.setattr(apply_module, "grade", _graded)
+    monkeypatch.setattr(eval_module, "load_eval_env", lambda: {})
+    monkeypatch.setattr(eval_module, "run_agent", _never_spend)
+
+    with pytest.raises(SystemExit) as excinfo:
+        eval_module.run_command(_run_args())
+
+    assert "DEEPSEEK_API_KEY" in str(excinfo.value)
+    assert called == ["sterile", "hazard_mapping", "reference_solution"], (
+        "a pre-spend gate did not run, or ran out of order"
+    )

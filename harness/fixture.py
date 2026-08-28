@@ -36,6 +36,7 @@ class Fixture:
     hazards: list[dict]
     manifest: set[str]
     scope: list[str]
+    reference: str
 
     @property
     def manifest_paths(self) -> set[str]:
@@ -48,8 +49,35 @@ class Fixture:
 
     @property
     def known_good_dir(self) -> Path:
-        """Reference tree used to collect grader tests before any paid run."""
-        return self.root / "known_good" / "explicit_all"
+        """Reference tree used to collect grader tests before any paid run.
+
+        Declared per fixture rather than guessed. This hardcoded fixture #1's
+        `explicit_all` - a fixture-specific name in fixture-generic code, the
+        same bug class as eval.py's hardcoded `notifications/services.py`. A
+        fixture ships several structurally different known-good trees, so
+        picking one by name or by sort order is a coin flip; the caller needs
+        a tree where every declared grader test collects.
+        """
+        if not self.reference:
+            raise FixtureViolation(
+                f"{self.id}: hazards.yaml declares no `reference` known-good tree"
+            )
+        if self.reference != Path(self.reference).name or self.reference in (
+            ".",
+            "..",
+        ):
+            raise FixtureViolation(
+                f"{self.id}: reference must be a plain directory name, "
+                f"not {self.reference!r} - it is joined onto the fixture root, "
+                f"and an absolute or parent part escapes it"
+            )
+        path = self.root / "known_good" / self.reference
+        if not path.is_dir():
+            raise FixtureViolation(
+                f"{self.id}: reference known-good tree {self.reference!r} "
+                f"is not a directory: {path}"
+            )
+        return path
 
 
 def load_fixture(path: Path) -> Fixture:
@@ -68,6 +96,7 @@ def load_fixture(path: Path) -> Fixture:
         hazards=data.get("hazards") or [],
         manifest=manifest,
         scope=data.get("scope") or [],
+        reference=data.get("reference") or "",
     )
 
 

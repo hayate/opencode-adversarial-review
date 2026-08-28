@@ -300,3 +300,133 @@ def test_a_report_rewritten_after_the_run_is_not_trusted(fixture, tmp_path):
     result = grade(fixture, tree)
     assert result.hazard_results["H-CALLSITE"] != "pass", result.hazard_results
     assert "exit status" in (result.error or ""), result.error
+
+
+def test_a_censored_hazard_is_attributed_to_the_model_not_dropped(fixture):
+    """A grader that SKIPS a hazard is censoring it, and censoring must be
+    counted or it is silent.
+
+    A fixture may skip a hazard it cannot observe - py-callsite-02's guards
+    skip when the subject does not run at all, so one defect cannot fail three
+    hazards. That lands as setup.outcome == "skipped" with no call phase, which
+    _classify already reads as `invalid`. But `setup_broken` matched only
+    "error", so cause came back None, and record_grade then increments NOTHING:
+    the per-hazard ungradable tally is gated on cause == MODEL_OUTPUT, and
+    invalid_harness is gated on nothing else having graded.
+
+    The censored hazards therefore vanished from summary.json entirely. That
+    matters because bucket() takes rates over valid runs: the arm that ships
+    broken code more often has more of its guard evidence deleted, biasing
+    those guards toward parity - the very defect the skip was introduced to
+    fix, one layer down.
+    """
+    def entry(nodeid, skipped):
+        if skipped:
+            return {"nodeid": nodeid, "setup": {"outcome": "skipped"},
+                    "call": None, "teardown": {"outcome": "passed"}}
+        return {"nodeid": nodeid, "setup": {"outcome": "passed"},
+                "call": {"outcome": "failed"}, "teardown": {"outcome": "passed"}}
+
+    # EVERY declared node id reports, so `missing_nodeids` is not what is
+    # under test here - only the skip is.
+    report = {"tests": [
+        entry(nodeid, skipped=hazard["id"] != "H-CALLSITE")
+        for hazard in fixture.hazards
+        for nodeid in hazard["tests"]
+    ]}
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-CALLSITE"] == "fail"
+    assert result.hazard_results["H-EXCLUDED"] == "invalid"
+    assert result.cause == "model_output", (
+        "a skipped hazard with no cause increments nothing in record_grade"
+    )
+
+
+def _report_for(fixture, broken_hazard, phase_outcome):
+    """A complete report: one hazard in the given state, the rest failing."""
+    def entry(nodeid, broken):
+        if broken:
+            return dict({"nodeid": nodeid, "call": None,
+                         "teardown": {"outcome": "passed"}}, **phase_outcome)
+        return {"nodeid": nodeid, "setup": {"outcome": "passed"},
+                "call": {"outcome": "failed"}, "teardown": {"outcome": "passed"}}
+
+    return {"tests": [
+        entry(nodeid, hazard["id"] == broken_hazard)
+        for hazard in fixture.hazards
+        for nodeid in hazard["tests"]
+    ]}
+
+
+def test_a_fixture_error_is_attributed_to_the_model(fixture):
+    """pytest-json-report writes a fixture failure as TEST-level "error", with
+    the setup STAGE reading "failed".
+
+    Three sites read the stage dict for "error" instead - _classify's guard
+    (dead code, the correct verdict arrives via the call-is-None fallthrough),
+    `any_failed` in grade (so the exit-status cross-check, which is what makes
+    the report tamper-evident, ignored setup failures entirely), and
+    `setup_broken` here. The last one meant a hazard censored by a fixture
+    EXCEPTION got cause None, and record_grade then increments nothing for it -
+    the same silent-censoring bug fixed for the "skipped" path four lines
+    below, still live on the "error" path above it.
+    """
+    report = _report_for(
+        fixture, "H-EXCLUDED",
+        {"outcome": "error", "setup": {"outcome": "failed"}},
+    )
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-EXCLUDED"] == "invalid"
+    assert result.cause == "model_output"
+
+
+def test_a_skip_raised_during_the_call_phase_is_also_censoring(fixture):
+    """Censoring is not always raised from a fixture. py-callsite-02's
+    rendering probe skips from inside the test body when it cannot obtain a
+    variance, which lands on the call phase rather than on setup."""
+    report = _report_for(
+        fixture, "H-OPENQ",
+        {"outcome": "skipped", "setup": {"outcome": "passed"},
+         "call": {"outcome": "skipped"}},
+    )
+    result = interpret_report(fixture, report)
+    assert result.hazard_results["H-OPENQ"] == "invalid"
+    assert result.cause == "model_output"
+
+
+def test_the_reference_solution_must_actually_pass_before_any_spend(fixture):
+    from graders.apply import validate_reference_solution
+
+    validate_reference_solution(fixture)
+
+
+def test_a_reference_solution_that_does_not_pass_is_rejected(fixture, tmp_path):
+    """validate_hazard_mapping stopped being able to fail.
+
+    It runs --collect-only, and for a grader that never imports the subject,
+    collection is completely independent of the tree under test - it passes
+    against an EMPTY reference directory, verified. So the only gate standing
+    between a broken grader and a paid run had gone hollow, and the `reference`
+    declaration did no work at the gate it was added for.
+
+    Every defect this round found in the grader itself - a probe that failed a
+    correct solution, a staging fault published as a model failure, a contracts
+    key coupled by two independent literals - would have been caught here, for
+    the cost of one container run before spending anything.
+    """
+    import shutil
+
+    from graders.apply import validate_reference_solution
+
+    root = tmp_path / fixture.id
+    shutil.copytree(fixture.root, root)
+    (root / "known_good" / "empty_tree").mkdir()
+    hazards = root / "hazards.yaml"
+    hazards.write_text(
+        hazards.read_text().replace(
+            f"reference: {fixture.reference}", "reference: empty_tree"
+        )
+    )
+
+    with pytest.raises(FixtureViolation, match="reference solution"):
+        validate_reference_solution(load_fixture(root))

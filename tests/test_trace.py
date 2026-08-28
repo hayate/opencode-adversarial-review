@@ -250,3 +250,178 @@ def test_a_redirect_into_the_subject_is_still_an_edit():
         changes=NO_CHANGES, allowed_scope=set(), must_read={"notifications/views.py"},
     )
     assert "notifications/views.py" in obs["edited_paths"]
+
+
+def test_read_before_edit_is_false_when_the_census_came_after_the_first_edit():
+    """False does not mean the model failed to look.
+
+    The natural order for this task - open the helper, change it, then census
+    its callers - reads every required path but reads them after the first
+    edit, so the signal is False while `read_paths` shows all three. The
+    signal is descriptive and feeds no verdict, but it is reported next to
+    H-CALLSITE, and reading it as "did not look" would manufacture a
+    difference out of workflow order rather than diligence - the same confound
+    class as the bash-reads artifact this module already carries.
+    """
+    sites = {
+        "pricing/reconcile.py",
+        "pricing/summary.py",
+        "pricing/recovery.py",
+    }
+    obs = observations(
+        _session(
+            _tool("edit", input={"filePath": "/workspace/pricing/report.py"}),
+            *[_bash(f"cat {site}") for site in sorted(sites)],
+        ),
+        changes=NO_CHANGES,
+        allowed_scope=set(),
+        must_read=sites,
+    )
+    assert obs["read_before_edit"] is False
+    assert set(obs["read_paths"]) >= sites, (
+        "the census IS visible in read_paths; only the ordering signal is False"
+    )
+
+
+# --- A `>` inside quoted text or a heredoc body is not a redirect ---
+
+
+@pytest.mark.parametrize("command", [
+    # Reproduced from the committed py-callsite-01 report, where attempt 3
+    # recorded edited_paths ["',", "',", ...]: the capture group ran from the
+    # `>` of a quoted operator list to the following comma.
+    """python -c "ops = ['<', '>', '=']" """,
+    'grep -rn "recipients -> tz" notifications/',
+    'echo "digest > threshold"',
+    # Heredoc bodies are input DATA, not shell syntax. Writing a throwaway
+    # script this way is a workflow habit, and habits differ between models.
+    "python - <<'EOF'\nif count > 2:\n    pass\nEOF",
+    'python - <<PY\nprint("a > b")\nPY',
+])
+def test_a_redirect_inside_quotes_or_a_heredoc_is_not_an_edit(command):
+    """_REDIRECT was applied to raw segment text with no quote awareness, so
+    any `>` in a string literal became a phantom edit.
+
+    This is the /dev/null artifact through a different door, and it lands the
+    same way: a phantom edit lowers first_edit, which shrinks reads_before_edit
+    and can flip read_before_edit to False. Models differ in how often they
+    reach for `python -c` and heredocs, so scoring that as diligence
+    manufactures a differential out of workflow habit - the confound class this
+    module already carries two comments about.
+    """
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+        must_read={"notifications/views.py"},
+    )
+    assert obs["edited_paths"] == [], command
+
+
+@pytest.mark.parametrize("command,target", [
+    ("echo x > notifications/views.py", "notifications/views.py"),
+    ("echo x >notifications/views.py", "notifications/views.py"),
+    ("echo x >> notifications/views.py", "notifications/views.py"),
+    ("echo x >>notifications/views.py", "notifications/views.py"),
+    ("pytest -q 2> notifications/views.py", "notifications/views.py"),
+    ("cat a.py > /workspace/notifications/views.py", "notifications/views.py"),
+])
+def test_a_real_redirect_into_the_subject_is_still_an_edit(command, target):
+    """Quote awareness must not cost the detection it was added for."""
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert target in obs["edited_paths"], command
+
+
+def test_a_quoted_redirect_does_not_disturb_the_read_ordering(command=None):
+    """The reason the phantom matters, stated as behaviour rather than a path
+    list: a quoted `>` in the FIRST bash call sets first_edit to 0, so every
+    later read counts as read-after-edit and a model that looked at everything
+    scores False."""
+    obs = observations(
+        _session(
+            _bash("""python -c "ops = ['<', '>', '=']" """),
+            _tool("read", input={"filePath": "/workspace/notifications/views.py"}),
+            _tool("edit", input={"filePath": "/workspace/notifications/views.py"}),
+        ),
+        changes=NO_CHANGES, allowed_scope=set(),
+        must_read={"notifications/views.py"},
+    )
+    assert obs["read_before_edit"] is True
+
+
+# --- A redirect target is a WRITE, never an argument of the read command ---
+
+
+@pytest.mark.parametrize("command,reads,edits", [
+    # Observed verbatim in the first opus run on py-callsite-02, which recorded
+    # read_paths [..., '>', 'contracts.json', 'cat', '>', 'feed.csv', ...].
+    ("cat pricing/feeds.py > contracts.json",
+     ["pricing/feeds.py"], ["contracts.json"]),
+    ("cat > feed.csv", [], ["feed.csv"]),
+    ("head -20 pricing/report.py 2> /dev/null", ["pricing/report.py"], []),
+    ("cat pricing/model.py >> notes.txt", ["pricing/model.py"], ["notes.txt"]),
+    ("cat pricing/model.py 2>&1", ["pricing/model.py"], []),
+])
+def test_a_redirect_is_not_an_argument_of_the_read_command(command, reads, edits):
+    """_bash_reads took every non-flag token after a read command as a path, so
+    `>` and the file being WRITTEN were both recorded as reads.
+
+    That is the same defect as the quoted-redirect artifact, in the sibling
+    function: _tokens is shlex.split, which leaves shell operators sitting in
+    the argument list. It survived the redirect fix because that fix only
+    touched the edit side, and it surfaced on opus rather than deepseek because
+    the two models redirect at different rates - which is precisely how a
+    parser artifact becomes a differential.
+    """
+    obs = observations(
+        _session(_bash(command)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert obs["read_paths"] == reads, command
+    assert obs["edited_paths"] == edits, command
+
+
+# --- A newline separates commands; a stripped heredoc must not glue them ---
+
+
+def test_a_newline_separates_commands():
+    """_SEGMENT split on ||, &&, ; and | but NOT on a newline, so a multi-line
+    script collapsed into one segment.
+
+    When its first command was a read command, every LATER command name and
+    argument became a read path. The first opus n=3 run recorded read_paths
+    containing 'cat', 'cd', '.', 'sed', 'python', 'echo', a raw sed script and
+    a shell echo banner. Same class as the redirect artifacts: shell syntax
+    read as a filename, landing on whichever arm writes multi-line scripts more
+    often.
+    """
+    script = (
+        "cd /workspace\n"
+        "cat pricing/model.py\n"
+        "python -m pricing > out.txt\n"
+        "sed -i 's/a/b/' pricing/reconcile.py"
+    )
+    obs = observations(
+        _session(_bash(script)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert obs["read_paths"] == ["pricing/model.py"]
+    assert obs["edited_paths"] == ["out.txt", "pricing/reconcile.py"]
+
+
+def test_a_stripped_heredoc_does_not_glue_the_next_command_on():
+    """Removing the body must leave the line boundary behind.
+
+    Without it `cat > feed.csv` and the following `cd /workspace` became one
+    command, so `cd` and its argument were recorded as reads of the cat.
+    """
+    script = (
+        "cat > /tmp/opencode/feed.csv <<'CSV'\n"
+        "supplier,rate\n"
+        "CSV\n"
+        "cd /workspace\n"
+        "cat pricing/feeds.py"
+    )
+    obs = observations(
+        _session(_bash(script)), changes=NO_CHANGES, allowed_scope=set(),
+    )
+    assert obs["read_paths"] == ["pricing/feeds.py"]
+    assert "workspace" not in obs["read_paths"]

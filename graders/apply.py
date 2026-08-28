@@ -224,15 +224,56 @@ def validate_hazard_mapping(fixture: Fixture) -> None:
         )
 
 
+def _error(test: dict) -> bool:
+    """A fixture that could not build.
+
+    pytest-json-report records this as TEST-level "error" while the setup
+    STAGE reads "failed" - never "error". Three sites here read the stage dict
+    for "error", so all three tested a value that never appears: this guard was
+    dead code, the exit-status cross-check ignored setup failures entirely, and
+    interpret_report's setup_broken never fired, which left a hazard censored
+    by a fixture exception with no cause - and therefore counted nowhere.
+    """
+    return test.get("outcome") == "error"
+
+
+def validate_reference_solution(fixture: Fixture) -> None:
+    """The declared reference tree must actually pass every hazard.
+
+    validate_hazard_mapping runs --collect-only, and for a grader that never
+    imports the subject, collection is independent of the tree under test - it
+    passes against an EMPTY reference directory. That left no pre-spend gate
+    with any power over the grader itself, and made the `reference` declaration
+    do no work at the gate it was added for.
+
+    Grading the reference costs one container run before a paid one, and it is
+    the check that catches a grader which fails a correct solution - the worst
+    shape a defect here can take, because a false failure on an achievement
+    hazard is indistinguishable from the finding the eval exists to publish.
+    """
+    result = grade(fixture, fixture.known_good_dir)
+    if result.error:
+        raise FixtureViolation(
+            f"{fixture.id}: grading the reference solution failed: {result.error}"
+        )
+    wrong = {h: v for h, v in result.hazard_results.items() if v != "pass"}
+    if wrong:
+        raise FixtureViolation(
+            f"{fixture.id}: the reference solution "
+            f"{fixture.reference!r} does not pass every hazard: {wrong}. "
+            f"A grader that fails a correct solution manufactures exactly the "
+            f"finding this eval publishes."
+        )
+
+
 def _classify(test: dict) -> str:
     """A hazard failure is an assertion in the CALL phase.
 
     A setup or teardown error is infrastructure - a broken conftest, a fixture
     that could not build - and says nothing about the model.
     """
-    for phase in ("setup", "teardown"):
-        if (test.get(phase) or {}).get("outcome") == "error":
-            return "invalid"
+    if _error(test):
+        return "invalid"
     outcome = (test.get("call") or {}).get("outcome")
     if outcome == "passed":
         return "pass"
@@ -265,8 +306,11 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
 
         report_path = out / "report.json"
         if result.timed_out:
-            # The grader itself is fixed and fast; a timeout here is model code
-            # hanging on import or at module scope.
+            # A timeout here is model code hanging - on import, at module
+            # scope, or in a subprocess an out-of-process grader drives.
+            # Per-call budgets inside a grader must compose to less than
+            # this cap, or which verdict a hang produces depends on how
+            # many inputs it hangs on.
             return _all_invalid(fixture, "grader timed out", MODEL_OUTPUT)
         if not report_path.exists():
             # Distinguish "pytest ran and could not get started against this
@@ -309,10 +353,8 @@ def grade(fixture: Fixture, tree: Path | str) -> GradeResult:
                 MODEL_OUTPUT if exit_code in (2, 3, 4, 5) else HARNESS,
             )
         any_failed = any(
-            (t.get("call") or {}).get("outcome") == "failed"
-            or (t.get(p2) or {}).get("outcome") == "error"
+            (t.get("call") or {}).get("outcome") == "failed" or _error(t)
             for t in report.get("tests", [])
-            for p2 in ("setup", "teardown")
         )
         if (exit_code == 1) != any_failed:
             return _all_invalid(
@@ -337,10 +379,24 @@ def interpret_report(fixture: Fixture, report: dict) -> GradeResult:
     # the cause is subject code - and attributing it to the harness would
     # silently resample exactly the catastrophic runs the tri-state exists to
     # keep visible.
-    setup_broken = any(
-        (t.get(phase) or {}).get("outcome") == "error"
+    setup_broken = any(_error(t) for t in reported)
+    # A SKIPPED hazard is censoring, and censoring must be counted or it is
+    # silent. A fixture may skip a hazard it cannot observe - py-callsite-02's
+    # guards skip when the subject does not run at all, so one defect cannot
+    # fail three hazards - and that lands as a skipped setup phase with no call
+    # phase, which _classify already reads as `invalid`. Without a cause,
+    # record_grade increments NOTHING for it: the per-hazard ungradable tally
+    # is gated on MODEL_OUTPUT and invalid_harness is gated on nothing else
+    # having graded. The hazard then vanishes from summary.json, and bucket()
+    # takes rates over valid runs - so the arm that ships broken code more
+    # often has more of its guard evidence deleted, biasing those guards toward
+    # parity. Attributing to the model follows the same rule as the ambiguous
+    # cases below: an over-counted ungradable rate is visible, silent censoring
+    # is not.
+    censored = any(
+        (t.get(phase) or {}).get("outcome") == "skipped"
         for t in reported
-        for phase in ("setup", "teardown")
+        for phase in ("setup", "call")
     )
     by_nodeid = {t["nodeid"]: t for t in reported}
     results: dict[str, str] = {}
@@ -361,5 +417,9 @@ def interpret_report(fixture: Fixture, report: dict) -> GradeResult:
             results[hazard["id"]] = "pass"
         else:
             results[hazard["id"]] = "fail"
-    cause = MODEL_OUTPUT if (missing_nodeids or setup_broken) else None
+    cause = (
+        MODEL_OUTPUT
+        if (missing_nodeids or setup_broken or censored)
+        else None
+    )
     return GradeResult(results, None, cause)

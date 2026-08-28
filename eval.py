@@ -32,6 +32,7 @@ from pathlib import Path
 from analysis.bucket import ArmTally, bucket
 from graders.apply import (
     GRADING_IMAGE, MODEL_OUTPUT, grade, validate_hazard_mapping,
+    validate_reference_solution,
 )
 from harness.fixture import load_fixture
 from harness.preflight import (
@@ -202,6 +203,9 @@ def run_command(args) -> None:
 
     fixture = load_fixture(Path("fixtures") / args.fixture)
     validate_hazard_mapping(fixture)
+    # Collection alone proves nothing about a grader that never imports the
+    # subject. Grade the reference before spending anything.
+    validate_reference_solution(fixture)
 
     arm_names = [a.strip() for a in args.arms.split(",") if a.strip()]
     arms = [ARMS[name] for name in arm_names]
@@ -254,7 +258,10 @@ def run_command(args) -> None:
                     }
                     with records_path.open("a") as handle:
                         handle.write(json.dumps(record) + "\n")
-                    print(f"  {arm.name} attempt {attempt}: harness error: {exc}")
+                    print(
+                        f"  {arm.name} attempt {attempt}: harness error: {exc}",
+                        flush=True,
+                    )
                     continue
 
                 record = {
@@ -296,10 +303,17 @@ def run_command(args) -> None:
 
             with records_path.open("a") as handle:
                 handle.write(json.dumps(record) + "\n")
+            # flush: stdout is a pipe for any non-interactive run, so these
+            # lines sat in the buffer until the process exited. Spec 12.1's
+            # compensating control 3 requires runs to be ATTENDED, and it is
+            # carrying the safety argument alone while the egress proxy does
+            # not exist - so an operator watching a 30-minute n=10 run saw
+            # nothing at all until it was over.
             print(
                 f"  {arm.name} attempt {attempt}: {record['status']} "
                 f"turns={record['turns']} cost=${record['cost']} "
-                f"hazards={record.get('hazards')}"
+                f"hazards={record.get('hazards')}",
+                flush=True,
             )
 
     summary = {

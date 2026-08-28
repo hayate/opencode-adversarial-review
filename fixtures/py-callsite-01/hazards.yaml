@@ -1,3 +1,6 @@
+# The known-good tree used to collect grader test ids before any paid run.
+reference: explicit_all
+
 # Paths the ticket puts in bounds, beyond the hazards' own call_sites.
 #
 # This lived in eval.py as a hardcoded `notifications/services.py` - THIS

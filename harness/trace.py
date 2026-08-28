@@ -44,9 +44,12 @@ NODE_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
 READ_COMMANDS = {"cat", "head", "tail", "less", "more", "bat", "nl", "od", "wc"}
 SEARCH_COMMANDS = {"grep", "rg", "ag", "ack"}
 
-_SEGMENT = re.compile(r"\s*(?:\|\||&&|;|\|)\s*")
+# A NEWLINE separates commands too. Without it a multi-line script was one
+# segment, so a script beginning `cat x` recorded every later command name
+# and argument as a read of that cat.
+_SEGMENT = re.compile(r"\s*(?:\|\||&&|;|\||\n)\s*")
 _ENV_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_REDIRECT = re.compile(r">>?\s*([^\s;|&>]+)")
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 @dataclass(frozen=True)
@@ -92,8 +95,44 @@ def _normalise(path: str) -> str:
         return pure.as_posix().lstrip("/")
 
 
+def _strip_heredocs(command: str) -> str:
+    """Drop heredoc BODIES before the command is read as shell syntax.
+
+    A heredoc body is input DATA - a throwaway Python script, a JSON blob - and
+    parsing it as shell read `if count > 2:` as a redirect and `a | b` as a
+    segment boundary. Reaching for `python - <<PY` rather than an edit tool is a
+    workflow habit, and habits differ between models, so charging one for it is
+    the manufactured-differential class this module already carries two
+    comments about.
+    """
+    kept: list[str] = []
+    rest = command
+    while True:
+        match = _HEREDOC.search(rest)
+        if not match:
+            kept.append(rest)
+            return "".join(kept)
+        kept.append(rest[: match.start()])
+        marker = match.group(2)
+        # The operator itself is dropped with the body; what follows it on the
+        # same line is still shell and is kept.
+        line, _, body = rest[match.end():].partition("\n")
+        # The newline the body occupied is a command separator and must survive
+        # it, or the terminator glues `cat > feed.csv` onto the next line.
+        kept.append(line + "\n")
+        for index, text in enumerate(body.split("\n")):
+            # `<<-` permits a tab-indented terminator.
+            if text.strip() == marker:
+                rest = "\n".join(body.split("\n")[index + 1:])
+                break
+        else:
+            return "".join(kept)
+
+
 def _segments(command: str) -> list[str]:
-    return [s.strip() for s in _SEGMENT.split(command) if s.strip()]
+    return [
+        s.strip() for s in _SEGMENT.split(_strip_heredocs(command)) if s.strip()
+    ]
 
 
 def _tokens(segment: str) -> list[str]:
@@ -154,7 +193,7 @@ def exit_is_attributable(command: str) -> bool:
 
 
 def _bash_reads(segment: str) -> list[str]:
-    toks = _tokens(segment)
+    toks, _ = _shell_parts(segment)
     if not toks:
         return []
     head, args = _head(toks), toks[1:]
@@ -171,8 +210,71 @@ def _bash_reads(segment: str) -> list[str]:
     return []
 
 
+_OPERATORS = {">", ">>", ">&", "<", "<<", "|", "||", "&", "&&", ";", "(", ")"}
+
+
+def _shell_parts(segment: str) -> tuple[list[str], list[str]]:
+    """Split a segment into (argument tokens, redirect targets).
+
+    Two artifacts, one cause: _tokens is shlex.split, which respects quotes but
+    leaves shell OPERATORS sitting in the argument list. The old regex then read
+    a quoted `>` as a redirect, and _bash_reads read both `>` and the file being
+    WRITTEN as arguments of the read command - so `cat feeds.py > contracts.json`
+    recorded two reads and named the write target as one of them.
+
+    shlex with punctuation_chars emits `>` and `>>` as operators of their own and
+    keeps a quoted string as ONE token, so a `>` that never left a string cannot
+    be either. `commenters` is cleared, or a `#` would truncate the command and
+    take any redirect after it.
+
+    On unbalanced quotes it falls back to the old tokens and claims NO
+    redirects. That under-reports edits, which pushes first_edit later and makes
+    read_before_edit more generous - the only direction that cannot invent the
+    "did not look" reading this module warns about at length.
+    """
+    try:
+        lexer = shlex.shlex(segment, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        toks = list(lexer)
+    except ValueError:
+        return _tokens(segment), []
+
+    args: list[str] = []
+    targets: list[str] = []
+    index = 0
+    while index < len(toks):
+        token = toks[index]
+        if token in {">", ">>", ">&"}:
+            # `2> err` lexes as ('2', '>', 'err'): the fd is not an argument.
+            if args and args[-1].isdigit():
+                args.pop()
+            if index + 1 < len(toks):
+                # `2>&1` redirects onto a descriptor, not onto a file.
+                if token != ">&":
+                    targets.append(toks[index + 1])
+                index += 2
+                continue
+            index += 1
+            continue
+        if token == "<":
+            # An input redirect IS a read, so its target stays an argument.
+            index += 1
+            continue
+        if token in _OPERATORS:
+            index += 1
+            continue
+        args.append(token)
+        index += 1
+
+    start = 0
+    while start < len(args) and _ENV_ASSIGN.match(args[start]):
+        start += 1
+    return args[start:], targets
+
+
 def _bash_edits(segment: str) -> list[str]:
-    toks = _tokens(segment)
+    toks, redirects = _shell_parts(segment)
     out: list[str] = []
     if toks:
         head, args = _head(toks), toks[1:]
@@ -187,7 +289,7 @@ def _bash_edits(segment: str) -> list[str]:
             out.append(plain[-1])
         elif head in {"touch", "truncate", "patch"}:
             out += plain
-    for target in _REDIRECT.findall(segment):
+    for target in redirects:
         # A discarded or external destination is not an edit to the subject.
         # Counting /dev/null put a read and an "edit" at the same tool-call
         # index, so the ordering check reported the file was never read before
@@ -261,9 +363,17 @@ def observations(
         if first_edit is None or index < first_edit
     }
 
-    # Tri-state. False is a claim that the model did not look; it must not be
-    # returned when the evidence could not have shown looking, nor when there
-    # is nothing it was required to read.
+    # Tri-state. None means the evidence could not have shown looking, or
+    # there was nothing it was required to read.
+    #
+    # False means "not every required path was read before the first edit
+    # anywhere in the run". It does NOT mean the model failed to look: the
+    # natural order for a signature change - open the helper, change it, then
+    # census its callers - reads everything and still scores False, with the
+    # reads plainly visible in read_paths. Read it as diligence and a
+    # difference in workflow order between two arms becomes a difference in
+    # care, which is the confound class the bash-reads artifact above already
+    # cost this harness once. Descriptive only; it feeds no verdict.
     if not trace_complete or not must_read:
         read_before_edit = None
     else:
