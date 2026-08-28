@@ -46,13 +46,18 @@ export function buildGitArgs(request) {
     args.push("-n", safeLimit(request.limit))
   }
 
+  if (request.ref !== undefined && (request.base !== undefined || request.head !== undefined)) {
+    reject("ref cannot be combined with base or head")
+  }
+  if (request.head !== undefined && request.base === undefined) {
+    reject("head requires base")
+  }
+
   if (request.base !== undefined) {
     const base = safeValue(request.base, "base")
     args.push(request.head !== undefined
       ? `${base}...${safeValue(request.head, "head")}`
       : base)
-  } else if (request.head !== undefined) {
-    safeValue(request.head, "head")
   } else if (request.ref !== undefined) {
     args.push(safeValue(request.ref, "ref"))
   }
