@@ -23,7 +23,10 @@ const ARG_PLACEHOLDER = "$ARGUMENTS"
 // a user's agent that happens to share the name.
 const OURS = "x-opencode-adversarial-review"
 
-const READ_ONLY_PERMISSION = { edit: "deny", bash: "deny", webfetch: "deny" }
+// external_directory is denied too: a code reviewer has no business reading
+// outside the repository it was pointed at. doom_loop is deliberately left
+// unset - it is not security relevant, and setting it would be cargo cult.
+const READ_ONLY_PERMISSION = { edit: "deny", bash: "deny", webfetch: "deny", external_directory: "deny" }
 
 const BASE_TOOLS = {
   read: true, grep: true, glob: true, list: true,
