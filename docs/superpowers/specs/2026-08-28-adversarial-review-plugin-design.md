@@ -1,7 +1,8 @@
 # Adversarial review plugin for opencode - design
 
 **Date:** 2026-08-28
-**Status:** approved in brainstorming, not yet planned or implemented
+**Status:** approved in brainstorming; revised after Codex adversarial review
+(section 9). Not yet planned or implemented.
 **Supersedes the delivery half of:** `2026-08-27-deepseek-review-gauntlet-design.md`
 (sections 10 and 11). That spec's harness, containment and statistics sections
 still stand.
@@ -11,47 +12,90 @@ still stand.
 ## 1. Why this exists, and what changed
 
 The original project derived review instructions from a measured differential
-between DeepSeek and Opus, then shipped them as a skill. Two fixtures in, the
-evidence says that will not work.
+between DeepSeek and Opus, then shipped them as a skill. Two fixtures in, we
+stopped.
 
-**What the eval actually measured** (see `docs/reviews/` and the run reports):
+**This is an economic stop, not a scientific null.** The distinction matters and
+an earlier draft of this spec got it wrong. What the evidence licenses is
+"the first replication pair did not justify further spend." It does NOT license
+"the 12-fixture programme cannot work": only one hazard family received a
+replication pair, both fixtures are Python, no TypeScript fixture exists, and
+the other planned hazard classes were never built.
 
-| Hazard | Failures / valid runs, both fixtures, both arms |
-|---|---|
-| H-CALLSITE | 4 / 20 |
-| H-EXCLUDED | 0 / 20 |
-| H-OPENQ | 0 / 20 |
+### 1.1 The corpus, stated exactly
 
-The one measurement with power behind it: DeepSeek fails H-CALLSITE **3 of 10**
-on py-callsite-01 (Wilson 95% CI 0.11-0.60). Spec 9.2's promotion rule needs a
-rate of 0.8. Observing 3 or fewer failures in 10 at a true rate of 0.8 has
-probability 0.00086, so the threshold is effectively ruled out. `bucket()`
-returns `neither` even with the control arm at a hypothetical 0/10 - no Opus run
-can rescue it, because the failing bar is on the DeepSeek side.
+Seven report directories exist. An earlier draft published `4/20`, computed by a
+script that silently skipped two reports whose summary schema predates the
+`arms` key. That exclusion was technical, not methodological, and was not
+disclosed. The corrected figures:
 
-**And the hazard does not measure what it is named for.** All ten runs read 3/3
-and edited 3/3 declared call sites, the three failures included.
-`read_before_edit` and `trace_complete` were true in all ten. No recorded
-observation separates a failing run from a passing one. The failure lives in the
-*content* of an edit, which the harness does not record. An instruction derived
-from this hazard would tell a reviewer to check that every call site was
-visited; the data says they always are.
+| Report | Arm | H-CALLSITE | Stage |
+|---|---|---|---|
+| 20260827T084906Z-py-callsite-01 | opus | 0/1 | smoke |
+| 20260827T085214Z-py-callsite-01 | deepseek / opus | 0/3 / 0/3 | exploration |
+| 20260827T103656Z-py-callsite-01 | deepseek | 1/3 | exploration |
+| 20260827T214912Z-py-callsite-02 | deepseek | 0/3 | exploration |
+| 20260827T222108Z-py-callsite-02 | opus | 0/1 | smoke |
+| 20260828T022344Z-py-callsite-02 | opus | 0/3 | exploration |
+| 20260828T023617Z-py-callsite-01 | deepseek | 3/10 | confirmation |
 
-**Three independent reasons derivation cannot produce the skill:**
+**Totals: 4 failures / 27 valid runs.** H-EXCLUDED and H-OPENQ: 0 failures.
 
-1. The effect sizes are far below the promotion bar, and the bar was chosen to
-   control family-wise error without being checked against achievable effects.
-2. Even a promoted hazard yields no instruction, because the eval measures
-   failure *rates* and instructions need *mechanisms*.
+That total pools a smoke run, exploration and confirmation, which spec 9.1
+forbids. It is recorded here as a corpus census, not as an estimate of anything.
+The only cell with power is the last row.
+
+Also corrected: an earlier draft said Opus had never run on py-callsite-01. It
+has - 0/4 across the two excluded reports.
+
+**Any future report published from this repo must name the exact report
+directories constituting each cell.** The absence of such a manifest is what
+allowed the error above.
+
+### 1.2 What the one powered cell says
+
+DeepSeek fails H-CALLSITE **3 of 10** on py-callsite-01 (Wilson 95% CI
+0.11-0.60). Spec 9.2's promotion rule needs 0.8. Observing 3 or fewer failures
+in 10 at a true rate of 0.8 has probability 0.00086, so **that fixture cannot
+meet the rule**, whatever the control arm does. This is a fixture-level
+conclusion and is stated as one.
+
+### 1.3 What the traces do and do not show
+
+All ten runs name all three declared call sites in both `read_paths` and
+`edited_paths`, the three failures included, with `trace_complete` and
+`read_before_edit` true throughout.
+
+An earlier draft concluded from this that the hazard "does not measure what it
+is named for." **That overreaches.** `edited_paths` is derived from tool-call
+inputs, not from the final diff, so it establishes that a file was opened for
+editing - not that the call expression was correctly updated. A model that opens
+all three callers and updates them *wrongly* is still a call-site correctness
+failure.
+
+What the traces license is narrower and still useful: **these are not
+"never found the call site" failures.** The failure lives in the content of an
+edit. We cannot say more, because the harness discards `result.session` and the
+final tree.
+
+### 1.4 Why derivation is nonetheless not the path
+
+Three reasons, only the first of which is statistical:
+
+1. On the one fixture with power, effect size is far below the promotion bar,
+   and the bar was chosen to control family-wise error without being checked
+   against achievable effects.
+2. **An instruction needs a mechanism, and this pipeline records rates.** Even
+   knowing H-CALLSITE fails 3/10, we cannot say what to tell a reviewer,
+   because nothing retained distinguishes a failing run from a passing one.
 3. A derived instruction is scoped to a model version and expires with it.
 
-This is spec 11's staged delivery working as designed - "the differential may be
-thin" was a pre-agreed live risk, and the gate says publish the null and stop.
-The answer arrived after 2 fixtures instead of 12.
+Reason 2 is the decisive one, and it is a property of the instrument rather
+than of the effect size.
 
-### 1.1 The inversion
+### 1.5 The inversion
 
-The eval is retained, but pointed at **validation** rather than derivation. The
+The eval is retained and pointed at **validation** rather than derivation. The
 skill is written from judgment and then measured (section 5). The plugin ships
 the structural insight that never needed an eval: a reviewer pinned to a model
 the author did not use.
@@ -60,8 +104,14 @@ the author did not use.
 
 ## 2. What we are building
 
-**An opencode plugin that runs an adversarial code review using a model the
-user configures, independent of the model driving their session.**
+**An opencode plugin that runs adversarial review using a model the user
+configures, independent of the model driving their session.**
+
+Two reviewers, because they are different jobs with different attack surfaces:
+
+- **`/adversarial-review`** - reviews code: a diff, a branch, a path.
+- **`/adversarial-review-design`** - reviews a **document**: a spec, a plan, an
+  RFC, a runbook.
 
 The reference point is `openai/codex-plugin-cc`, which gives Claude Code users a
 Codex reviewer. This is the mirror: it gives opencode users an Opus reviewer -
@@ -77,21 +127,47 @@ code.
 
 The product goal is therefore **raise the floor**, not only guard the ceiling.
 
+It also covers a gap that tool structurally leaves. `codex-plugin-cc`'s
+`adversarial-review` subcommand reviews a **git diff only**; reviewing a spec or
+a plan means driving its `task` subcommand directly. A design defect caught at
+the spec gate costs one edit; caught after implementation it costs the branch.
+This spec is itself the evidence: the Codex review in section 9 found a blocker
+in a document, where no code existed to review.
+
 ### 2.2 Boundaries
 
-- **Never changes the session's working model.** It has no opinion about what
-  the user codes with. The reviewer model is plugin configuration; the
-  cross-family property comes from the user's choice, not from anything the
-  plugin infers.
-- **Read-only.** A reviewer has no business editing code, and this is enforced
-  structurally (section 3.3), not by convention.
+- **Never changes the session's working model.** The reviewer model is plugin
+  configuration; the cross-family property comes from the user's choice, not
+  from anything the plugin infers.
+- **Read-only, enforced by construction** (section 3.3), not by permission
+  patterns over a shell.
 - **Standalone.** It does not assume it runs last in a gauntlet. Users who want
   that ordering say so in their own `AGENTS.md` / `CLAUDE.md`.
 - **API-key authentication only.** Anthropic forbids using Claude through
   harnesses that are not Anthropic's own, so shelling out to the `claude` CLI is
   ruled out and no provider abstraction is built for it.
 
-### 2.3 Out of scope for v1
+### 2.3 Why a plugin at all
+
+`opencode agent create` is documented and supports `--model`, `--mode`,
+`--permissions` and `--description`, writing an agent file. A model-pinned
+read-only subagent is therefore achievable without a plugin, and an earlier
+draft of this spec did not justify the difference.
+
+**The plugin earns its place on exactly one capability: a safe git inspection
+tool** (section 3.3). An agent file cannot ship a tool, and the alternative -
+granting the agent general bash and constraining it with permission patterns -
+does not work (section 9, finding 6). Config-driven model selection and one-line
+install are conveniences on top; they are not the justification.
+
+The design reviewer needs no tool at all - read and grep suffice - so it does
+not add to this justification. It rides along on machinery the git tool already
+pays for: model pinning, the config knob, verification, and one-line install.
+
+If the git tool is ever removed from scope, the plugin should be reduced to
+distributed agent templates.
+
+### 2.4 Out of scope for v1
 
 Background job management (`status` / `result` / `cancel`), multi-turn review
 threads, and mechanical or AST checks. The last of these was spec 4's "bucket 2"
@@ -121,7 +197,11 @@ in `Hooks`, `plugin?: Array<string | [string, PluginOptions]>` in `Config`, and
 `AgentConfig` carries `model`, `prompt`, `tools`, `permission`, `mode`,
 `description`.
 
-**This is undocumented API surface**, and is recorded as a risk in section 7.
+Tool registration - `Hooks.tool` - is the one documented mechanism we rely on,
+and it carries the capability that justifies the plugin.
+
+**Agent and command injection are undocumented surface**, recorded as the top
+risk in section 7.
 
 ### 3.2 Configuration
 
@@ -135,196 +215,242 @@ One knob. Someone reviewing with DeepSeek changes one string.
 
 ### 3.3 What the plugin registers
 
-Through the `config` hook:
+**1. A git inspection tool, `review_context`.** This is the security boundary
+and the reason the plugin exists.
 
-1. **Agent `adversarial-review`**
-   - `model` from plugin options, default `anthropic/claude-opus-5`
-   - `mode: "subagent"` - invoked, never driving
-   - `tools`: read / grep / glob enabled; write / edit / patch disabled
-   - `permission`: `edit: "deny"`, `webfetch: "deny"`, and `bash` as a pattern
-     map allowing `git diff`, `git log`, `git show` while denying `*`
-   - `prompt`: the reviewer prompt (section 4)
-2. **Command `/adversarial-review`**, bound to that agent, `subtask: true`,
-   taking a review target as its argument.
+- Invoked through `execFile` with a fixed argument vector. **No shell.**
+- Subcommand allowlist: `diff`, `log`, `show`, `status`, `ls-files`.
+- Option **allowlist**, not blocklist. `--output` and any option taking a
+  filesystem destination are absent from it.
+- Always passes `--no-ext-diff` and `--no-textconv`, so configured external
+  drivers cannot execute.
+- `-c` and `--exec-path` rejected outright.
+- stdout captured and returned; nothing written.
 
-No custom tools in v1. The reviewer uses opencode's built-in read and search
-tools and gathers its own context through the allowed git commands. The bash
-pattern map is what makes "read-only" enforced rather than promised.
+**2. Agent `adversarial-review`**
+- `model` from plugin options, default `anthropic/claude-opus-5`
+- `mode: "subagent"` - invoked, never driving
+- `tools`: read / grep / glob and `review_context` enabled; write / edit /
+  patch / **bash** disabled
+- `permission`: `edit: "deny"`, `bash: "deny"`, `webfetch: "deny"`
+- `prompt`: the reviewer prompt (Appendix A)
 
-### 3.4 Startup self-check
+**3. Agent `adversarial-review-design`**
+- same `model` from plugin options
+- `mode: "subagent"`
+- `tools`: read / grep / glob only. **No `review_context`**, no bash, no write.
+  A document reviewer that cannot write cannot damage the document it doubts.
+- `permission`: `edit: "deny"`, `bash: "deny"`, `webfetch: "deny"`
+- `prompt`: the design reviewer prompt (Appendix B)
 
-If the agent is absent from the resolved config after the `config` hook runs,
-fail loudly with an actionable message. A plugin that silently does nothing is
-the worst outcome of building on undocumented surface.
+**4. Commands `/adversarial-review` and `/adversarial-review-design`**, each
+bound to its agent with `subtask: true`.
+
+**Bash is denied entirely.** An earlier draft allowed `git diff`, `git log` and
+`git show` through a permission pattern map and claimed that made the reviewer
+structurally read-only. It does not: all three accept `--output=<path>`, which
+creates or truncates that file. Verified - `git diff --output=f.txt` truncated a
+tracked file to the empty blob. Denying bash also removes any dependence on
+opencode's permission-pattern match ordering, which we have not verified.
+
+### 3.4 Verifying the agent actually exists, and is ours
+
+An existence check is not sufficient, and an earlier draft's was worse than
+insufficient: it lived inside the `config` hook, so if opencode ever stops
+invoking that hook the guard never runs. That is a guard that cannot fire -
+item 2 of our own attack list, in our own design.
+
+Three separate checks:
+
+1. **Collision, before mutation.** If an agent or command of that name already
+   exists in the incoming config and was not written by us, **abort without
+   mutating** and report the collision. Silently overwriting a user's agent is
+   the worst available outcome.
+2. **Fingerprint, after the config resolves.** Verify model, prompt hash, mode,
+   tool set, permissions, and the command's agent binding and `subtask` flag -
+   not merely that the name is present. This detects a same-named user agent and
+   a later merge phase overriding our fields.
+3. **At invocation.** Verify the model actually serving the review matches the
+   configured one, independent of the `config` hook, so a hook that stops firing
+   surfaces as a loud failure rather than a session-model review.
+
+All three checks apply to **both** agents and **both** commands.
+
+Any check failing produces an actionable error naming what differed. A plugin
+that silently does nothing, or silently reviews with the wrong model, is the
+failure this design exists to prevent.
+
+### 3.5 Compatibility
+
+Declare a tested opencode version range. Test both plugin orderings and the
+same-name user agent and command cases.
 
 ---
 
-## 4. The reviewer prompt
+## 4. The reviewer prompts
 
-Three axes, with an explicit priority order derived from evidence rather than
-convention.
+Full text in Appendix A (code) and Appendix B (design).
 
 ### 4.1 Where the content comes from
 
-Two sources, both empirical:
+Two empirical sources:
 
 1. **`openai/codex-plugin-cc`'s adversarial-review prompt**, for the operational
-   axis and three framing devices worth borrowing outright: no credit for good
-   intent or likely follow-up work; grounding rules requiring findings to be
-   defensible from context with inferences named; calibration preferring one
-   strong finding to several weak ones.
+   axis and three framing devices: no credit for good intent or likely
+   follow-up work; grounding rules requiring findings to be defensible with
+   inferences named; calibration preferring one strong finding to several weak.
 2. **A harvest of ~60 merged PRs in `Wayfarer-Group/materia-api`**, a production
-   Python codebase whose PR bodies record what adversarial review found, what
-   was fixed, and what was *cleared after triage*.
+   Python codebase whose PR bodies record what review found, what was fixed, and
+   what was *cleared after triage*.
 
 ### 4.2 What the harvest changed
 
-**Tests that cannot fail is the most recurring serious defect class**, by a wide
-margin - not a footnote. Observed shapes include: tests passing for an unrelated
-reason (15 tests green against a command that did not exist); tautologies
-computing the expectation with the production code under test; substring
-collisions; fixtures that structurally cannot discriminate (every fixture at an
-hour where two timezones agree); the unit under test mocked at every appearance;
-test infrastructure hiding the condition (one transaction means a row lock is
-never contended); assertions encoding the defect as the requirement; a `set`
-collapsing a duplicate write into a single one.
-
-**Classical appsec yields almost nothing.** Across 60 PRs: no SQL injection,
-XSS, deserialization, path traversal, or dependency-CVE findings. The yield is
-overwhelmingly correctness-under-partial-failure, test validity, and
-operational semantics. The prompt says so explicitly rather than leaving the
-ordering to the model, because most checklists lead with appsec.
+**Tests that cannot fail is the most recurring serious defect class** in that
+corpus, by a wide margin. Observed shapes include tests passing for an unrelated
+reason, tautologies computing the expectation with the code under test,
+substring collisions, fixtures that structurally cannot discriminate, the unit
+under test mocked at every appearance, test infrastructure hiding the condition,
+assertions encoding the defect as the requirement, and containers collapsing the
+signal.
 
 **Triage is as important as detection.** The harvest catalogues six shapes of
-*cleared* finding - reviewer false positives - and these become a
-`<verification_before_reporting>` section. This is the differentiator:
-codex-plugin-cc has grounding rules, but no taxonomy of how review findings go
-wrong.
+*cleared* finding, which become `<verification_before_reporting>`. This is the
+differentiator: codex-plugin-cc has grounding rules but no taxonomy of how
+review findings go wrong.
 
-### 4.3 Priority order
+### 4.3 Priority is threat-sensitive, not a fixed ranking
 
-1. Tests that cannot fail
-2. Guards keyed on a proxy rather than the invariant
-3. Silent failure - swallowed, under-logged, or failing open
-4. Wiring - code that cannot run, or runs nothing
-5. Everything else
+An earlier draft instructed reviewers not to lead with classical appsec,
+generalising from zero appsec findings across 60 PRs of one Django codebase.
+**That was unsafe.** The harvest has no exposure denominator - those PRs may
+simply not have touched parsers, auth, network handlers or templating - and the
+plugin ships to users writing Node request handlers and Go services, where a
+global search-order bias could suppress real vulnerabilities.
+
+The prompt therefore classifies the changed surface first:
+
+- **When the change touches untrusted input, trust boundaries, auth, secrets,
+  network access, filesystem access, dependency boundaries or multi-tenancy,
+  security is first tier.**
+- Otherwise, lead with test validity, proxy-signal guards, silent failure and
+  wiring, which is where the yield is in ordinary application work.
+- **Severity always overrides corpus frequency.**
+
+The anti-padding instruction is kept; the general claim that appsec is "rarely
+where the yield is" is removed.
 
 ### 4.4 The three axes
 
-- **Correctness of construction** - looks right, cannot work. Test validity,
-  proxy-signal guards, silent failure, wiring gaps, hallucinated or misused
-  APIs, stale prose.
+- **Correctness of construction** - looks right, cannot work.
 - **Architecture and fit** - works, wrong shape, wrong for *this* repo.
-  Reimplementing what exists, ignoring local conventions, layering violations,
-  poor boundaries, wrong abstraction level.
-- **Operational risk** - auth and trust boundaries, data loss, idempotency and
-  duplicate side effects, retries and partial failure, races, degraded
-  dependencies, framework and ORM semantics, time arithmetic, third-party
-  payload shape, config and environment leakage, migration hazards,
-  observability gaps.
+- **Operational risk** - including security, elevated per 4.3.
 
-The prompt instructs reporting by severity and explicitly forbids producing a
-finding per category, because a checklist demanding coverage per axis is how
-reviews get padded.
+The prompt instructs reporting by severity and forbids producing a finding per
+category.
 
 ### 4.5 Licensed non-answers
 
 The reviewer is instructed to say when a question can only be settled by
-**running** the code, rather than asserting. The harvest is unambiguous that the
-worst defects surfaced only by running - a duplicate keyword argument
-`SyntaxError` that the linter did not flag, and five guard tests lost in a
-branch promotion that `git cherry` was structurally blind to. A reviewer
-required to always assert will guess instead.
+**running** the code. The harvest is unambiguous that the worst defects surfaced
+only by running. A reviewer required to always assert will guess instead.
 
-The full prompt text is Appendix A. It is the design, not an implementation
-detail, and changes to it are spec changes.
+### 4.6 The design reviewer's attack list
+
+Appendix B attacks how documents fail rather than how code fails, so almost
+nothing transfers from Appendix A - "tests that cannot fail" is meaningless
+against a spec.
+
+Its taxonomy is derived from the Codex review recorded in section 9, which is
+an unusually good source: seven findings against a real spec, six accepted. Each
+finding shape became an attack. The document you are reading was the corpus.
 
 ---
 
 ## 5. Validation
 
-The skill ships with v1, honestly labelled as judgment rather than measurement,
-and is measured afterwards. Validation informs v2; it does not block v1.
+**Validation does not gate v1.** The skill ships with v1, labelled as judgment
+rather than measurement. An earlier draft contradicted itself here, describing
+validation as happening after ship and also as a ship gate; that is resolved in
+favour of the former.
 
-### 5.1 The experiment
+### 5.1 What the fixture experiment is, and is not
 
-The existing fixtures are better review targets than model output, because they
-carry ground truth:
+Running the three conditions - bare, doctrine, and an equal-length neutral
+placebo - against `fixtures/*/known_bad` and `fixtures/*/known_good` is a
+**smoke test**. It is not a ship gate and cannot become one, for reasons worth
+recording so nobody re-derives them:
 
-- `fixtures/*/known_bad/` - a planted defect at a known location. **Positive
-  cases.**
-- `fixtures/*/known_good/` - three independently correct solutions per fixture.
-  **Negative controls.**
+- The `known_good` variants differ by one to four one-line edits and were
+  authored together. They are near-clones, not independent controls.
+- There are **two distinct planted defects** across the whole corpus. Catch rate
+  therefore moves in 16.7-point increments; the effective sample is 2, not 72.
+- Even 0 false positives in 18 calls has a Wilson 95% upper bound near 17.6%.
+- The defects are synthetic and exposed through tiny curated repositories. They
+  do not represent the distribution of weak-model output.
+- **These fixtures were used to develop and repeatedly repair the harness.** They
+  are development data, not a held-out evaluation set.
+- Passing the planted grader does not prove a tree is otherwise defect-free, so
+  a genuine unrelated finding would be miscounted as a false positive.
 
-Three conditions - bare prompt, doctrine prompt, and an equal-length neutral
-checklist placebo - randomised and blinded from grading, replicated because the
-review is stochastic.
+What it is good for: catching gross regressions - a prompt that finds nothing, or
+one that floods every tree with findings. That is worth having and worth ~$10-15.
 
-- On `known_bad`: does the review name the planted defect at its actual location?
-- On `known_good`: does it stay quiet, or manufacture findings?
+**Staging must strip fixture provenance**: no `known_good` / `known_bad` path
+components, no fixture names, so the reviewer cannot recognise the setup.
 
-The placebo is load-bearing: without it, a with/without comparison cannot
-separate hazard-specific content from the generic effect of more words.
+### 5.2 What a real gate would require
 
-### 5.2 Ship gate for the doctrine
+Deferred, and specified so it is not reinvented casually:
 
-The doctrine must **beat the placebo on catch rate AND not be worse than bare on
-false positives.** A doctrine that wins only by flagging more has bought catch
-rate with noise, and we ship a shorter prompt instead. This is a gate the skill
-can fail.
+- Held-out **whole repositories**, not variants of one tree, across more than one
+  language and stack.
+- Real weak-model diffs with an expert-adjudicated issue inventory.
+- Finding-level precision and recall, a paired comparison, the clustering unit
+  named, a non-inferiority margin for false positives, and a confidence
+  criterion - all pre-registered.
+- The prompt frozen before a locked test set consulted exactly once.
 
-Reported as catch rate *and* false-positive rate. Catch rate alone rewards a
-reviewer that flags everything.
+Until that exists, no claim stronger than "did not regress on a smoke test" may
+be published about the prompt.
 
-### 5.3 Cost
-
-2 fixtures x (1 known-bad + 3 known-good) x 3 conditions x 3 replicates is
-approximately 72 reviews, roughly $10-15 at Opus rates. Trimmable by reducing
-replicates or reviewing a subset of known-good trees, at the cost of power.
-
-### 5.4 What the harness keeps and loses
+### 5.3 What the harness keeps and loses
 
 **Keeps:** rootless podman sandboxing, image digest pinning, model verification
 via `messages[].info.modelID`, provenance capture, and accounting that refuses
 to let invalid runs into a denominator.
 
-**Loses:** `run_agent`, the arms, the differential, and `bucket()` - none are
-needed to compare review conditions against fixed trees.
+**Loses:** `run_agent`, the arms, the differential, and `bucket()`.
 
 **Changes:** grading moves from "run pytest against a model's tree" to "did this
 review name this defect".
 
-### 5.5 Session and tree retention, demoted
+### 5.4 Retention
 
-`records.jsonl` keeps only derived observations and discards `result.session`,
-so a parser fix cannot be applied retroactively - four parser fixes landed on
-2026-08-28 and every earlier report is frozen wrong. This was blocking
-hazard-mechanism analysis, which we are no longer doing. It remains worth having
-if we ever review real model-authored diffs rather than curated trees.
-**Demoted from blocking to nice-to-have.**
+`records.jsonl` keeps only derived observations and discards `result.session`
+and the final tree, which is why section 1.3 cannot say why the three failures
+failed. Four parser fixes landed on 2026-08-28 and every earlier report is
+frozen wrong.
+
+For the smoke test this does not bite, because the trees are fixed and known.
+It becomes blocking again the moment we want to review real model-authored
+diffs, and it is the prerequisite for ever explaining an H-CALLSITE failure.
 
 ---
 
 ## 6. Repository, distribution, README
 
-- **Rename** the repository to `opencode-adversarial-review`. The current name
-  promises a DeepSeek-specific tool and delivers a general one. GitHub keeps
-  redirects, so open PRs survive.
-- **Merge PRs #1 and #2** before building, so the plugin starts from a clean
-  `main`.
+- **Rename** the repository to `opencode-adversarial-review`.
+- **Merge PRs #1 and #2** before building.
 - **Layout:** plugin source in `plugin/`; the harness stays where it is.
 - **Distribution:** publish to npm as `opencode-adversarial-review`, so install
-  is `opencode plugin opencode-adversarial-review` and repo layout does not
-  affect users.
-- **README order**, treated as a requirement rather than a nicety, because a
-  repo containing both a research harness and a plugin will otherwise confuse
-  people looking for the plugin:
+  is `opencode plugin opencode-adversarial-review`.
+- **README order**, treated as a requirement:
   1. What it does
   2. One-line install
   3. How to set your reviewer model
   4. **What to do if you have no Anthropic API key**
   5. How to run it
-  6. Link to the research and the null result
+  6. Link to the research, stated as an economic stop rather than a null result
 
 ---
 
@@ -332,26 +458,52 @@ if we ever review real model-authored diffs rather than curated trees.
 
 | Risk | Mitigation |
 |---|---|
-| **Undocumented API surface.** `config` hook, agent/command injection and plugin options all work in 1.18.23 but are absent from the docs, so they can change without deprecation. | Startup self-check that fails loudly (3.4). Documented fallback: register a `tool` - fully documented - and drive a session via `PluginInput.client`. Not built in v1. |
-| **Prompt length assumes a capable reviewer.** A small local model configured as the *reviewer* may follow a layered instruction set badly. | Note in the README. Optionally a compact prompt variant, deferred until someone needs it. |
-| **The harvest is from strong-model output.** Weak-model code will hit these classes and also produce cruder failures this corpus cannot show. | Treat the attack list as a well-grounded floor, not a complete map. Revisit after real usage. |
-| **`command.template` placeholder syntax unverified.** Expected `$ARGUMENTS`. | Confirm during implementation; low risk, minutes to discover. |
-| **Reviewer cost is per-review and uncapped.** Opus measured at ~$0.55 per fixture-scale run. | README states the cost characteristic; the model is one config line to change. |
+| **Undocumented agent/command injection.** Works in 1.18.23, absent from the docs, can change without deprecation. | Three-stage verification (3.4) including an invocation-time check outside the hook. Tested version range (3.5). Fallback: the prompt ships as a documented agent template. |
+| **The git tool is the security boundary.** A gap in its option allowlist is a write primitive. | Allowlist not blocklist; `execFile` with no shell; `--no-ext-diff` / `--no-textconv`; adversarial tests for output options, redirects, substitutions, compound arguments, config injection, pagers, aliases, external diff drivers and submodules. |
+| **Prompt length assumes a capable reviewer.** A small local model as *reviewer* may follow a layered instruction set badly. | README note. Compact variant deferred. |
+| **The harvest is from strong-model output** in one language and framework. | Treated as a floor, not a map. Threat-sensitive priority (4.3) stops it from suppressing security review on other stacks. |
+| **Reviewer cost is per-review and uncapped.** | README states the cost characteristic; the model is one config line. |
+| **`command.template` placeholder syntax unverified.** Expected `$ARGUMENTS`. | Confirm during implementation. |
+| **The design reviewer's taxonomy comes from a single review of a single spec.** | Stated as such in 4.6. It is a starting point to be revised as more design reviews accumulate, not a validated instrument. |
 
 ---
 
 ## 8. What we are giving up
 
 The ability to say "this instruction exists because DeepSeek failed X 8/10 times
-where Opus failed 0/10". That provenance was the original point, and today's
-numbers say we are unlikely to earn it. What replaces it is weaker but real: a
-skill validated against planted defects and negative controls, with its
-false-positive rate reported.
+where Opus failed 0/10". That provenance was the original point, and the one
+powered cell says we are unlikely to earn it cheaply.
 
-The eval is not discarded. It answered its question - **is there a measurable
-differential large enough to derive instructions from?** - and the answer, after
-two fixtures rather than twelve, is no. That is published as a null result, and
-the harness becomes the instrument that keeps the shipped skill honest.
+The eval is not discarded, and its result is stated honestly: **the first
+replication pair did not justify further spend.** That is an economic stop on a
+programme that remains, strictly speaking, unfinished. The harness becomes the
+instrument that keeps the shipped prompt from regressing.
+
+---
+
+## 9. Codex adversarial review, 2026-08-28
+
+Run against the first draft, per the spec-gate rule. Verdict: DO-NOT-BUILD as
+written, seven findings. Six were accepted and are folded in above; the
+disposition is recorded so the next reader does not re-derive it.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Fixture-level result generalised to a programme-level null; `4/20` not reproducible and mixes stages | **Accepted.** Section 1 reframed as an economic stop; corpus census corrected to 4/27 with a per-report manifest; stage-mixing disclosed |
+| 2 | "H-CALLSITE does not measure what it is named for" overreaches - `edited_paths` is tool-call input, not the final diff | **Accepted.** Narrowed to "not a missed-call-site failure" in 1.3 |
+| 3 | The self-check cannot detect a wrong or overridden agent, and lives inside the hook it checks | **Accepted.** Rewritten as 3.4, three checks including one outside the hook |
+| 4 | Validation has ~2 experimental units, not 72; and 5.1/5.2 contradicted each other on whether it gates | **Accepted.** Demoted to an explicit smoke test; a real gate specified in 5.2 |
+| 5 | Globally demoting appsec is unsafe for other stacks; no exposure denominator | **Accepted.** Priority is now threat-sensitive (4.3) |
+| 6 | The bash permission map does not enforce read-only: `git diff/log/show --output=<path>` writes | **Accepted, blocker.** Reproduced - a tracked file was truncated. Bash denied entirely; a `review_context` tool replaces it (3.3) |
+| 7 | v1 recreates a documented `opencode agent create` feature using undocumented hooks | **Accepted.** The plugin is now justified by the git tool alone (2.3), which an agent file cannot ship |
+
+Findings Codex raised and then cleared itself, recorded so they are not
+re-litigated: git aliases do not shadow built-in subcommands; `git -c
+core.pager=` and `git -c include.path=` are excluded by an anchored subcommand
+pattern; `git submodule` likewise.
+
+One claim in the review is **unverified**: that opencode's permission patterns
+are last-match-wins. Denying bash outright removes any dependence on it.
 
 ---
 
@@ -391,8 +543,20 @@ thing being mocked. Check that the symbol exists.
 </operating_stance>
 
 <priority_order>
-Look here first. This ordering reflects what adversarial review actually finds
-in real codebases, not what checklists usually list first.
+FIRST, classify the surface this change touches. The right search order depends
+on it, and getting this backwards is how a reviewer misses the thing that
+mattered.
+
+IF the change touches untrusted input, trust boundaries, authentication or
+authorization, secrets, network access, filesystem paths, deserialization,
+templating, dependency boundaries, or multi-tenancy - then SECURITY IS FIRST
+TIER. Injection, SSRF, authorization gaps, path traversal, unsafe
+deserialization and tenant-isolation failures belong at the top of your search,
+ahead of everything below.
+
+OTHERWISE, for ordinary application and library work, look here first. This
+ordering reflects what adversarial review actually finds, which is not what
+checklists usually list first:
 
 1. TESTS THAT CANNOT FAIL. The most common serious defect, and the one that
    makes every other guarantee hollow.
@@ -401,9 +565,11 @@ in real codebases, not what checklists usually list first.
 4. Wiring: code that cannot run, or runs nothing.
 5. Everything else below.
 
-Classical appsec - injection, XSS, deserialization, path traversal, dependency
-CVEs - is worth a look but is rarely where the yield is. Do not lead with it,
-and do not pad a review with it.
+Severity always overrides this ordering. A high-severity finding outranks the
+list wherever you found it.
+
+Do not pad a review with generic security speculation on code that touches none
+of the surfaces above - but do not skip security on code that does.
 </priority_order>
 
 <attack_surface>
@@ -572,3 +738,181 @@ outcome, not a failure to find something.
   triage*.
 - Axis 3 is close to codex-plugin-cc's attack surface, deliberately: it is
   well-made and we spend our originality on axes 1 and 2.
+
+---
+
+## Appendix B - The design reviewer prompt
+
+This is the `prompt` field of the injected `adversarial-review-design` agent.
+
+```text
+<role>
+You are an adversarial design reviewer. Your target is a DOCUMENT - a spec, a
+plan, an RFC, a runbook - not a diff. Your job is to find the strongest reasons
+it should not be built as written.
+
+A design defect caught here costs one edit. Caught after implementation it costs
+the branch.
+</role>
+
+<target>
+Review: {{TARGET}}
+If the user named a focus, weight it heavily but still report any other
+material issue you can defend.
+</target>
+
+<operating_stance>
+A document is a set of CLAIMS. Attack the claims, not the prose.
+
+Read the codebase the document describes. USE YOUR FILE AND SEARCH TOOLS. A
+document can describe code that does not exist, misdescribe code that does, cite
+numbers that do not reproduce, or depend on behaviour nobody verified. You
+cannot find any of that by reading the document alone.
+
+Where the document cites a number, a file, a version or an experiment, GO AND
+CHECK IT. A citation you did not verify is a claim, not evidence.
+
+Do not give credit for good intent, for a section being well written, or for
+work the document promises to do later.
+</operating_stance>
+
+<priority_order>
+1. CLAIMS THAT EXCEED THEIR EVIDENCE. The most common serious defect in design
+   documents, and the hardest to see because the reasoning is usually valid -
+   it is the scope of the conclusion that is wrong.
+2. A safety or correctness claim that the named mechanism does not actually
+   enforce.
+3. Guards, checks and gates that cannot fire.
+4. Experiments and metrics with fewer independent units, or less power, than
+   they appear to have.
+5. Unstated assumptions and unhandled failure paths.
+6. Scope that does not justify its cost or its risk.
+</priority_order>
+
+<attack_surface>
+
+EVIDENCE
+- Does every cited number reproduce from the data the document points at? Run it.
+- Is the SELECTION of data disclosed? Silently excluded cases are the classic
+  defect - a number computed over "the data that parsed" reported as if it were
+  the corpus.
+- Are populations or stages pooled that the document's own rules separate?
+- Is a sample size doing less work than it looks like? Count INDEPENDENT units,
+  not observations. Near-clones of one case are one case.
+- Is a negative control actually independent of the positive case?
+
+INFERENCE
+- Is a measured proxy being read as the thing it proxies for? "The file was
+  opened for editing" is not "the call was correctly updated".
+- Does the conclusion's scope match the evidence's scope? A result about one
+  case, one language, one repository, one version, is not a result about the
+  programme.
+- Is absence of evidence being reported as evidence of absence? Ask what the
+  exposure denominator was - a category with no findings may simply never have
+  been touched.
+
+MECHANISM
+- Does the named mechanism actually produce the claimed property? Verify it
+  rather than accepting it. If the document says a constraint makes something
+  impossible, try to do it.
+- Can the proposed check DETECT the failure it exists for? An existence check
+  cannot tell a wrong thing from a missing thing.
+- Does the check run somewhere that survives the failure it guards against? A
+  guard living inside the mechanism it validates fails silently when that
+  mechanism does.
+- What happens on collision with something the user already has?
+
+ALTERNATIVES AND SCOPE
+- Does a documented, simpler, or first-party mechanism already do this? Look for
+  it before accepting a bespoke one.
+- What does this buy over doing nothing, or over the obvious cheaper option?
+- Is the document taking on a dependency on undocumented or unversioned
+  behaviour, and is the mitigation real or nominal?
+- Is anything irreversible, and is that acknowledged?
+
+INTERNAL INTEGRITY
+- Do sections contradict each other? Check especially where one section defines
+  a gate and another describes when it runs.
+- Are there placeholders, unresolved options, or requirements that could be read
+  two ways?
+- Does the document's own history contain a decision this draft silently
+  reverses?
+</attack_surface>
+
+<verification_before_reporting>
+Before you report anything, try to kill it. Design-review findings go wrong in
+these ways:
+
+1. THE DOCUMENT ALREADY SAYS IT. Re-read the surrounding sections; a concern
+   answered three paragraphs later is not a finding.
+2. OUT OF SCOPE BY DECLARATION. The document explicitly deferred it and gave a
+   reason. Attack the reason if it is weak; do not report the deferral as an
+   oversight.
+3. A DIFFERENT DESIGN, NOT A DEFECT. Preferring another approach is not a
+   finding unless you can name what breaks in this one.
+4. RIGHT DIAGNOSIS, WRONG FIX. Your remedy must be compatible with the
+   constraints the document actually operates under.
+5. THE PREMISE DOES NOT HOLD. Check what the numbers you are citing actually
+   measure before building on them.
+6. UNVERIFIED ASSERTION OF YOUR OWN. If you claim the document is wrong about an
+   API, a version or a behaviour, verify it in the repository or the installed
+   package first. Reasoning from vendor documentation against a system someone
+   has actually measured is how a review earns distrust.
+
+Say explicitly when a finding rests on an inference you could not verify, and
+lower your confidence accordingly.
+</verification_before_reporting>
+
+<finding_bar>
+Report only material findings. No wording, structure, or presentation notes.
+
+Every finding must answer:
+1. What goes wrong if this is built as written?
+2. Which part of the document is vulnerable - quote or cite it by section.
+3. What is the concrete consequence?
+4. What specific change would fix it?
+</finding_bar>
+
+<output_contract>
+Open with a verdict: BUILD, BUILD-WITH-CHANGES, or DO-NOT-BUILD-AS-WRITTEN, and
+name the decisive sections in one line.
+
+Then findings, ordered by severity. For each: the section, what goes wrong, why
+that section is vulnerable, the consequence, and a concrete fix.
+
+SAY PLAINLY WHICH SECTIONS ARE SOUND. A design review that reports only
+problems gives the author no way to tell what survived scrutiny from what you
+did not examine. Name what you checked and cleared, and say when you cleared it
+against evidence rather than by not looking.
+
+State what you read. You are read-only; recommend changes, do not make them.
+</output_contract>
+
+<calibration>
+Prefer one strong finding to several weak ones. Do not manufacture a finding per
+category to look thorough.
+
+If the design is sound, say so directly and report nothing. That is a real
+outcome.
+</calibration>
+```
+
+### B.1 Provenance
+
+Derived from the Codex adversarial review recorded in section 9: seven findings
+against the first draft of this spec, six accepted. Each accepted finding shape
+became an entry in `<priority_order>` or `<attack_surface>`:
+
+| Finding | Became |
+|---|---|
+| Fixture result generalised to a programme; number not reproducible | EVIDENCE: selection disclosure, pooled stages, reproduce the number |
+| `edited_paths` read as "correctly updated" | INFERENCE: proxy read as the thing it proxies for |
+| Self-check inside the hook it checks; existence-only | MECHANISM: can the check detect it, does it survive the failure |
+| 72 calls, effective n of 2; near-clone controls | EVIDENCE: count independent units |
+| Appsec demoted from one codebase's yield | INFERENCE: exposure denominator |
+| Read-only claimed, `--output` writes | MECHANISM: verify the mechanism produces the property |
+| Undocumented hooks recreating a documented feature | ALTERNATIVES AND SCOPE |
+
+`<verification_before_reporting>` item 6 comes from the opposite direction: the
+standing triage rule that a reviewer reasoning from vendor documentation
+sometimes contradicts behaviour we have measured.
