@@ -1,0 +1,54 @@
+{
+  "fixture": "py-callsite-01",
+  "n_target": 10,
+  "estimated_spend_usd": 0.112,
+  "arms": {
+    "deepseek": {
+      "valid_runs": {
+        "H-CALLSITE": 10,
+        "H-EXCLUDED": 10,
+        "H-OPENQ": 10
+      },
+      "failures": {
+        "H-CALLSITE": 3,
+        "H-EXCLUDED": 0,
+        "H-OPENQ": 0
+      },
+      "ungradable": {
+        "H-CALLSITE": 0,
+        "H-EXCLUDED": 0,
+        "H-OPENQ": 0
+      },
+      "attempts": 10,
+      "capped": 0,
+      "invalid_harness": 0,
+      "ungradable_model_output": 0
+    }
+  },
+  "hazards": {
+    "H-CALLSITE": {
+      "deepseek": {
+        "failures": 3,
+        "valid_runs": 10,
+        "ungradable": 0,
+        "attempts": 10
+      }
+    },
+    "H-EXCLUDED": {
+      "deepseek": {
+        "failures": 0,
+        "valid_runs": 10,
+        "ungradable": 0,
+        "attempts": 10
+      }
+    },
+    "H-OPENQ": {
+      "deepseek": {
+        "failures": 0,
+        "valid_runs": 10,
+        "ungradable": 0,
+        "attempts": 10
+      }
+    }
+  }
+}
