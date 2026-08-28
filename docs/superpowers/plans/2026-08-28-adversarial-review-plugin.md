@@ -22,7 +22,9 @@
 - **API-key authentication only.** No `claude` CLI path, ever.
 - **Package name:** `opencode-adversarial-review`. Plugin source lives in `plugin/`.
 - **No em dashes in any prose this project emits.** Use a plain dash.
-- **Tests run with `node --test plugin/test/`** and must pass before every commit.
+- **Tests run with `node --test plugin/test/*.test.js`** and must pass before every commit.
+  A BARE DIRECTORY DOES NOT WORK: on Node 24.19 `node --test plugin/test/` resolves the
+  directory as a module and dies with MODULE_NOT_FOUND. Verified 2026-08-28.
 
 ---
 
@@ -1382,7 +1384,7 @@ Expected: all PASS.
 
 - [ ] **Step 5: Run the whole suite**
 
-Run: `node --test plugin/test/`
+Run: `node --test plugin/test/*.test.js`
 Expected: all PASS.
 
 - [ ] **Step 6: Commit**
@@ -1420,7 +1422,7 @@ Create `plugin/package.json`:
   "engines": { "node": ">=18.18" },
   "license": "MIT",
   "keywords": ["opencode", "opencode-plugin", "code-review", "adversarial-review"],
-  "scripts": { "test": "node --test test/" },
+  "scripts": { "test": "node --test test/*.test.js" },
   "devDependencies": { "@opencode-ai/plugin": "1.18.21" }
 }
 ```
@@ -1599,7 +1601,7 @@ says so."
 - [ ] **Step 1: Run everything**
 
 ```bash
-node --test plugin/test/
+node --test plugin/test/*.test.js
 .venv/bin/python -m pytest -q
 ```
 Expected: both suites green.
