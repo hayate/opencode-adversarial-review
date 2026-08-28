@@ -23,6 +23,9 @@ before this file was written.
 | How do plugin options (the `[path, options]` tuple form in `opencode.json`) arrive? | As the second argument to the exported plugin function, e.g. `options={"model":"anthropic/claude-opus-5"}`. A directory-loaded plugin (no tuple, no `plugin` config entry) gets `options=null`. |
 | What syntax does a command template use for arguments? | **`$ARGUMENTS`**, exactly as expected. Confirmed via `probe-arguments.js`: template `echo BEGIN $ARGUMENTS END` invoked with `hello world` produced the literal prompt `echo BEGIN "hello world" END` (opencode wraps a multi-word argument string in double quotes when substituting). |
 | How do you actually invoke a plugin-injected command from the CLI? | **`opencode run --command <name> <args...>`.** Typing `/name args` as the plain message to `opencode run "..."` does **not** invoke the command - it is sent as literal chat text to the default agent, which may or may not notice it looks like a command (observed both a plausible-looking echo and a flat "I don't recognize that command" from the same literal input on different runs). This is a real footgun: the intuitive one-shot invocation does not work. |
+| After a `config` hook throws, do the plugin's OTHER hooks stay registered? | **Yes, and this matters.** The throw is caught, logged and ignored, and every hook the plugin returned stays live and keeps firing for the rest of the session. So a plugin that declines to install still runs its other hooks. Verified live 2026-08-29: with a colliding `adversarial-review` agent, `injectInto` threw `CollisionError` and `chat.params` then fired for the user's own agent on the very next request. |
+| Are markdown-file-defined AGENTS visible to the `config` hook? | **Yes** - unlike markdown-file-defined *commands*, which are not (see the row above on `cfg.command`). A `.opencode/agent/adversarial-review.md` is present in `cfg.agent` when the hook runs, so a name collision against it is detected normally. Verified 2026-08-29: the collision fired, the plugin backed off, and the markdown agent survived with its own description and prompt intact. The asymmetry between agents and commands here is undocumented and worth re-checking on upgrade. |
+| What shape is `model` on `chat.params`? | The FULL provider model record, not a two-field object: `id`, `providerID`, `name`, `api {id,url,npm}`, `capabilities`, `cost`, `limit`. Anything that serialises it wholesale into a message will paste a wall of JSON. |
 | What does a user see when a plugin FAILS TO LOAD? | **Nothing.** `opencode debug config` exits 0 with empty stderr and the plugin's agents and commands simply absent. The reason is reachable only via `opencode debug config --print-logs --log-level ERROR`, which prints `level=ERROR message="failed to load plugin" path=... error="<the thrown message>"`. Captured 2026-08-28 with a deliberately invalid `model` option. |
 | What does a user see when the `config` hook THROWS? | **Nothing, and the whole hook is rolled back.** Same exit 0 / empty stderr. Verified twice: a CollisionError (thrown before any mutation) and a fingerprint failure (thrown *after* injectInto had already mutated the config). In the second case NEITHER agent nor command survived - opencode discards the entire hook's mutations on a throw. That is the safe direction: a failed install is never a half-install. |
 | Can a plugin write to the user's terminal from inside a hook? | **No.** Both `console.error(...)` and a raw `process.stderr.write(...)` immediately before a throw in the `config` hook produced zero bytes on stderr and appeared nowhere in stdout. A plugin has no channel to the user at config time. |
@@ -271,6 +274,65 @@ the overwrite we refuse on principle, and a fingerprint failure means
 `inject.js` and `verify.js` disagree, which is our own bug and fails the test
 suite long before a user sees it.
 
+### Step 8: does a declined install stop the plugin's other hooks
+
+Captured 2026-08-29, free: the provider `baseURL` points at a dead port, so no
+tokens are billed, and `chat.params` fires before the HTTP attempt either way.
+
+A scratch project defines its OWN primary agent named `adversarial-review`, and
+loads this plugin alongside it. The plugin's `config` hook throws
+`CollisionError`, correctly refusing to overwrite. The question is what happens
+next. Two builds of the plugin, same config, same minute:
+
+```
+cd "$P" && F1_LOG=$P/f1.log ~/.opencode/bin/opencode run --agent adversarial-review "hi"
+```
+
+Before the fix:
+
+```
+CONFIG HOOK ENTERED
+INJECT THREW: CollisionError
+CHAT.PARAMS agent="title" inAGENTS=false
+CHAT.PARAMS agent="adversarial-review" inAGENTS=true
+```
+
+exit 1, and the user's own agent died with
+`opencode-adversarial-review: "adversarial-review" is about to be served by
+deepseek/deepseek-v4-flash, not the configured anthropic/claude-opus-5`.
+
+After the fix:
+
+```
+CONFIG HOOK ENTERED
+INJECT THREW: CollisionError
+CHAT.PARAMS agent="title" installed=false -> STANDING DOWN
+CHAT.PARAMS agent="adversarial-review" installed=false -> STANDING DOWN   (x6)
+```
+
+zero occurrences of our error, and their agent proceeds to its own provider.
+
+**The contract this pins:** a `config`-hook throw does NOT unregister the
+plugin. Every other hook stays live. Any hook that acts on a name the plugin
+tried and failed to claim must therefore check that its own injection actually
+landed, not merely that the name matches.
+
+### Step 9: are markdown-defined agents visible to the config hook
+
+Captured 2026-08-29, free, no model call:
+
+```
+mkdir -p "$P/.opencode/agent"   # with adversarial-review.md defining the user's own agent
+cd "$P" && ~/.opencode/bin/opencode debug config | jq ...
+```
+
+Observed: the resolved `adversarial-review` kept the markdown file's own
+description and prompt, and this plugin's second agent was absent - meaning the
+collision check saw the markdown agent and backed off. So markdown AGENTS are
+visible to the hook even though markdown COMMANDS are not. A user's
+markdown-defined agent is protected by the collision check exactly like a
+JSON-defined one.
+
 - `probe-arguments.js` - a copy of the injection probe with the injected
   command template changed to `echo BEGIN $ARGUMENTS END` and bound to
   `deepseek/deepseek-v4-flash` (the cheapest configured model on this
@@ -321,6 +383,10 @@ release with no changelog entry:
   either stream.
 - That a command with no `agent` and `subtask: false` is accepted and
   preserved by the config schema.
+- That a `config`-hook throw does not unregister the plugin: every other hook
+  it returned stays live and keeps firing.
+- That markdown-file-defined agents ARE visible to the `config` hook while
+  markdown-file-defined commands are NOT.
 
 ## Limits of this probe
 

@@ -130,6 +130,15 @@ const paramsInput = (agent, model) => ({
   sessionID: "ses_test", agent, model, provider: { id: "anthropic" }, message: {},
 })
 
+// The guard only has standing once our own injection actually landed. Every
+// chat.params test therefore installs first, which is also the only state that
+// occurs in production - opencode calls the config hook before any request.
+async function installed(options = {}) {
+  const hooks = await AdversarialReview(input, options)
+  await hooks.config({})
+  return hooks
+}
+
 test("chat.params is registered at all, or check 3 does not exist", async () => {
   const hooks = await AdversarialReview(input, {})
   assert.equal(typeof hooks["chat.params"], "function")
@@ -137,12 +146,12 @@ test("chat.params is registered at all, or check 3 does not exist", async () => 
 
 for (const name of AGENTS) {
   test(`the correct serving model passes silently: ${name}`, async () => {
-    const hooks = await AdversarialReview(input, {})
+    const hooks = await installed()
     await hooks["chat.params"](paramsInput(name, { providerID: "anthropic", id: "claude-opus-5" }), {})
   })
 
   test(`a WRONG serving model is refused at invocation: ${name}`, async () => {
-    const hooks = await AdversarialReview(input, {})
+    const hooks = await installed()
     await assert.rejects(
       () => hooks["chat.params"](paramsInput(name, { providerID: "deepseek", id: "deepseek-v4-flash" }), {}),
       (e) => {
@@ -155,7 +164,7 @@ for (const name of AGENTS) {
   })
 
   test(`an UNDETERMINABLE serving model is refused, not waved through: ${name}`, async () => {
-    const hooks = await AdversarialReview(input, {})
+    const hooks = await installed()
     await assert.rejects(
       () => hooks["chat.params"](paramsInput(name, undefined), {}),
       /cannot tell which model/,
@@ -166,7 +175,7 @@ for (const name of AGENTS) {
   // same opencode version. Pinning only one turns the guard into a permanent
   // false alarm the first time the shape shifts.
   test(`the modelID spelling of the same model is accepted: ${name}`, async () => {
-    const hooks = await AdversarialReview(input, {})
+    const hooks = await installed()
     await hooks["chat.params"](paramsInput(name, { providerID: "anthropic", modelID: "claude-opus-5" }), {})
   })
 }
@@ -176,23 +185,23 @@ for (const name of AGENTS) {
 // install the moment this plugin is loaded.
 for (const other of ["title", "build", "general", "summary", "compaction"]) {
   test(`another agent's model is none of our business: ${other}`, async () => {
-    const hooks = await AdversarialReview(input, {})
+    const hooks = await installed()
     await hooks["chat.params"](paramsInput(other, { providerID: "deepseek", id: "deepseek-v4-pro" }), {})
   })
 }
 
 test("an agent whose name merely starts with ours is not policed", async () => {
-  const hooks = await AdversarialReview(input, {})
+  const hooks = await installed()
   await hooks["chat.params"](paramsInput("adversarial-review-mine", { providerID: "deepseek", id: "x" }), {})
 })
 
 test("a missing agent name is not policed, since we cannot know it is ours", async () => {
-  const hooks = await AdversarialReview(input, {})
+  const hooks = await installed()
   await hooks["chat.params"](paramsInput(undefined, { providerID: "deepseek", id: "x" }), {})
 })
 
 test("a provider-qualified model with slashes in the id round-trips", async () => {
-  const hooks = await AdversarialReview(input, { model: "openrouter/anthropic/claude-3.5-sonnet" })
+  const hooks = await installed({ model: "openrouter/anthropic/claude-3.5-sonnet" })
   await hooks["chat.params"](
     paramsInput("adversarial-review", { providerID: "openrouter", id: "anthropic/claude-3.5-sonnet" }),
     {},
@@ -201,4 +210,175 @@ test("a provider-qualified model with slashes in the id round-trips", async () =
     () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: "openrouter", id: "anthropic/claude-3-opus" }), {}),
     /openrouter\/anthropic\/claude-3-opus/,
   )
+})
+
+// ---------------------------------------------------------------------------
+// The guard must not outlive its own standing. VERIFIED LIVE against opencode
+// 1.18.23: a config-hook throw is logged and IGNORED, and every hook the plugin
+// returned stays registered and keeps firing. So after a collision - where we
+// deliberately refused to install because the user already owns that name -
+// chat.params went on firing for THEIR agent, our model comparison failed, and
+// their agent died with our error on every invocation. We refuse to overwrite
+// their agent on principle and then break it anyway.
+// ---------------------------------------------------------------------------
+
+test("after a collision refuses our install, we stop policing the name the user owns", async () => {
+  const hooks = await AdversarialReview(input, {})
+  const mine = { description: "my own agent", model: "deepseek/deepseek-v4-flash", prompt: "mine" }
+  const config = { agent: { "adversarial-review": mine } }
+  await assert.rejects(() => hooks.config(config), /Refusing to overwrite/)
+  assert.equal(config.agent["adversarial-review"], mine, "their agent must be untouched")
+  // Their agent, their model, their business.
+  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "deepseek-v4-flash" }), {})
+  await hooks["chat.params"](paramsInput("adversarial-review-design", { providerID: "deepseek", id: "deepseek-v4-flash" }), {})
+})
+
+test("a config hook that never ran leaves the guard without standing", async () => {
+  const hooks = await AdversarialReview(input, {})
+  // No agent of ours exists, so any agent wearing the name belongs to someone else.
+  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
+})
+
+test("a fingerprint failure also withdraws the guard, since nothing of ours installed", async () => {
+  const hooks = await AdversarialReview(input, {})
+  const config = { command: {} }
+  let stored = {}
+  Object.defineProperty(config, "agent", {
+    configurable: true, enumerable: true,
+    get: () => ({ ...stored }), set: (value) => { stored = value },
+  })
+  await assert.rejects(() => hooks.config(config), /did not install correctly/)
+  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
+})
+
+test("a later successful install re-arms the guard", async () => {
+  const hooks = await AdversarialReview(input, {})
+  await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
+  await hooks.config({})
+  await assert.rejects(
+    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {}),
+    /about to be served by/,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// The guard's own error path is the one place that cannot afford to fail: the
+// message it produces is the only thing the user ever sees.
+// ---------------------------------------------------------------------------
+
+test("an unserialisable model does not replace our message with a raw TypeError", async () => {
+  const hooks = await installed()
+  const circular = { providerID: "anthropic" }
+  circular.self = circular
+  await assert.rejects(
+    () => hooks["chat.params"](paramsInput("adversarial-review", circular), {}),
+    /cannot tell which model/,
+  )
+  await assert.rejects(
+    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: 1n }), {}),
+    /cannot tell which model/,
+  )
+})
+
+// opencode's chat.params carries the full provider model record - api,
+// capabilities, cost, limits. Serialising it would paste a wall of JSON into a
+// message meant to be read by a person.
+test("the error names the shape rather than dumping the whole model record", async () => {
+  const hooks = await installed()
+  const fat = {
+    providerID: "anthropic", name: "Claude",
+    api: { id: "x", url: "https://example.invalid", npm: "y" },
+    capabilities: { temperature: true, reasoning: true, input: { text: true, audio: false } },
+    cost: { input: 1, output: 2, cache: { read: 1, write: 2 } },
+  }
+  await assert.rejects(() => hooks["chat.params"](paramsInput("adversarial-review", fat), {}), (e) => {
+    assert.match(e.message, /an object with keys/)
+    assert.ok(!e.message.includes("example.invalid"), "must not paste the record into the message")
+    assert.ok(e.message.length < 600, `message is ${e.message.length} chars, too long to read`)
+    return true
+  })
+})
+
+test("an empty-string model field reports that it cannot tell, not a mismatch", async () => {
+  const hooks = await installed()
+  for (const model of [{ providerID: "", id: "" }, { providerID: "anthropic", id: "" }, { providerID: "", id: "x" }]) {
+    await assert.rejects(
+      () => hooks["chat.params"](paramsInput("adversarial-review", model), {}),
+      /cannot tell which model/,
+      `expected the undeterminable message for ${JSON.stringify(model)}`,
+    )
+  }
+})
+
+// ---------------------------------------------------------------------------
+// directory is the only source of the git cwd. Undefined, execFile inherits the
+// process cwd and review_context silently reads whatever tree opencode started
+// in, reporting success - a review of the wrong tree, which reads exactly like a
+// review of the right one.
+// ---------------------------------------------------------------------------
+
+test("no usable directory installs a diagnostic instead of a silently-wrong reviewer", async () => {
+  for (const bad of [{ project: {}, client: {} }, { directory: "" }, { directory: 7 }, undefined, null]) {
+    const hooks = await AdversarialReview(bad, {})
+    assert.equal(hooks.tool, undefined, "no review_context tool may be registered without a directory")
+    const config = {}
+    await hooks.config(config)
+    assert.equal(config.agent, undefined, "no reviewer may be installed without a directory")
+    assert.match(config.command["adversarial-review"].description, /did not tell the plugin which directory/)
+    assert.match(config.command["adversarial-review"].template, /bug in the plugin/)
+  }
+})
+
+test("worktree is accepted when directory is absent", async () => {
+  const hooks = await AdversarialReview({ worktree: "/tmp/repo" }, {})
+  assert.ok(hooks.tool.review_context)
+  const config = {}
+  await hooks.config(config)
+  assert.ok(config.agent["adversarial-review"])
+})
+
+// ---------------------------------------------------------------------------
+// The diagnostic path exists to leave something behind when nothing can be
+// said. It must never itself be the thing that fails.
+// ---------------------------------------------------------------------------
+
+test("the diagnostic path stands down on a frozen config rather than throwing", async () => {
+  const hooks = await AdversarialReview(input, { model: "opus" })
+  await hooks.config(Object.freeze({}))
+  const readOnly = {}
+  Object.defineProperty(readOnly, "command", { value: {}, writable: false, configurable: false })
+  await hooks.config(readOnly)
+})
+
+test("a fault that is not the user's config does not tell them to fix their config", async () => {
+  // resolveOptions only throws OptionsError today, so this is reached through a
+  // getter. The point is the remedy, not the reachability: pointing someone at a
+  // `model` value that is already correct wastes their time.
+  const hooks = await AdversarialReview(input, { get model() { throw new Error("internal fault") } })
+  const config = {}
+  await hooks.config(config)
+  const command = config.command["adversarial-review"]
+  assert.match(command.description, /internal fault/)
+  assert.match(command.template, /bug in the plugin/)
+  assert.doesNotMatch(command.template, /Correct the `model` value/)
+})
+
+test("a genuine bad-model option still tells them to fix the model value", async () => {
+  const hooks = await AdversarialReview(input, { model: "opus" })
+  const config = {}
+  await hooks.config(config)
+  assert.match(config.command["adversarial-review"].template, /Correct the `model` value/)
+})
+
+test("a successful install followed by a failed one WITHDRAWS the guard", async () => {
+  const hooks = await AdversarialReview(input, {})
+  await hooks.config({})
+  await assert.rejects(
+    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {}),
+    /about to be served by/,
+  )
+  // Now a reload where the user has since added their own agent by that name.
+  await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
+  // The name is theirs now. Standing must be withdrawn, not left over from before.
+  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
 })
