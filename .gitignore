@@ -1,10 +1,5 @@
-runs/
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-containers/digests*
-*.egg-info/
+node_modules/
+*.tgz
+
 # Per-plan SDD scratch (briefs, reports, diffs); deleted when the plan completes
 .superpowers/
-plugin/node_modules/

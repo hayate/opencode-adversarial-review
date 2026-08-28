@@ -3,29 +3,95 @@
 Adversarial code and design review for [opencode](https://opencode.ai), run by a
 model you choose - independent of the model you are coding with.
 
-You write code with DeepSeek, Qwen or a local model. This reviews it with Opus.
-The reviewer is read-only and cannot touch your working tree.
+You write code with DeepSeek, Qwen or a local model. This reviews it with Opus,
+or with whatever else you point it at. The reviewer is read-only: it cannot edit
+your files, run shell commands, or reach the network.
 
-> **Status: not published to npm.** It is installed from a local checkout while
-> it is being tested. `plugin/package.json` carries `private: true` precisely so
-> that a stray `npm publish` cannot fire.
+```
+/adversarial-review                          review the current change
+/adversarial-review src/auth                 review a path
+/adversarial-review-design docs/my-spec.md   review a spec, plan or RFC
+```
+
+> **Status: not published to npm.** Install it from a checkout, below.
+> `package.json` carries `private: true` so a stray `npm publish` cannot fire.
+
+## What actually runs on your machine
+
+A plugin runs code on your computer, so here is the whole of it, plainly.
+
+**Three moments, and nothing in between.**
+
+1. **When opencode starts.** The plugin adds two agent definitions and two
+   command definitions to the config object opencode hands it, in memory. It
+   does not touch your config file on disk and makes no network call. The only
+   files it reads are its own two prompt texts, from beside its own source.
+2. **When you run one of the two commands.** opencode starts the reviewer as a
+   subagent on the model you configured. **The code being reviewed is sent to
+   that model's provider** - that is the entire point of the tool, and it is
+   your provider, under your API key, chosen by you.
+3. **While the review runs.** The reviewer may call one tool, `review_context`,
+   which runs read-only git in the repository you invoked it from.
+
+**What it cannot do.** Both reviewer agents are registered with `edit`, `bash`,
+`webfetch`, `write` and `patch` disabled, and with `external_directory` denied
+so they cannot read outside the project. They keep `read`, `grep`, `glob` and
+`list`, because a reviewer that cannot read your code cannot review it. The
+plugin itself contains no filesystem write of any kind.
+
+**The only subprocess is git**, through `execFile` - never a shell, so there is
+no redirection, substitution or command chaining available to anybody. The model
+picks one of five modes (`diff`, `log`, `show`, `status`, `files`) and supplies
+values; it cannot pass git flags of its own. git is given a minimal environment
+(`PATH`, `HOME`, `GIT_TERMINAL_PROMPT=0`), which blocks the `GIT_EXTERNAL_DIFF`
+and `GIT_CONFIG_*` escape hatches.
+
+**No telemetry.** Nothing is reported anywhere. There is no analytics, no
+crash reporting, and no phone-home of any kind.
+
+**Zero runtime dependencies.** `package.json` has no `dependencies` at all. The
+one devDependency is `@opencode-ai/plugin`, for types. Everything else is Node
+built-ins: `child_process`, `fs`, `path`, `url`, `crypto`.
+
+**It is small enough to read.** 837 lines across 8 source files, and the
+published package is 13 files. You can audit the whole thing in an afternoon,
+and I would rather you did than take my word for any of the above.
+
+## What is in this repository
+
+Everything here either ships or explains what ships.
+
+| path | what it is |
+|---|---|
+| `src/index.js` | the entry point: registers the hooks and the tool |
+| `src/inject.js` | builds the two agent and two command definitions |
+| `src/prompts.js`, `src/prompts/*.md` | the two reviewer prompts |
+| `src/options.js` | validates the one option, `model` |
+| `src/verify.js` | checks what actually landed in the resolved config |
+| `src/tool.js` | the `review_context` tool the reviewer calls |
+| `src/git-args.js` | turns a mode and values into a git argv - never flags |
+| `src/git-run.js` | runs git through `execFile` with a pruned environment |
+| `test/` | 174 tests. `npm test` |
+| `contracts/` | opencode behaviour this plugin depends on, pinned by probe, with the exact commands and verbatim output |
+
+Only `src/` is published; `test/` and `contracts/` stay in the repository.
 
 ## Install
 
-Clone this repository, then point opencode at `plugin/` in your `opencode.jsonc`:
+Clone this repository, then point opencode at it in your `opencode.jsonc`:
 
 ```jsonc
 {
   "plugin": [
-    ["/absolute/path/to/opencode-adversarial-review/plugin",
+    ["/absolute/path/to/opencode-adversarial-review",
      { "model": "anthropic/claude-opus-5" }]
   ]
 }
 ```
 
-The path may be the `plugin/` directory (resolved through its `main`) or
-`plugin/src/index.js` directly; both were verified against opencode 1.18.23.
-Put it in a project's `opencode.json` to scope it to that project, or in
+The path may be the repository root (resolved through `main`) or
+`src/index.js` directly. Both were verified against opencode 1.18.23. Put it in
+a project's `opencode.json` to scope it there, or in
 `~/.config/opencode/opencode.jsonc` for every project.
 
 Check it landed:
@@ -43,22 +109,14 @@ adversarial-review
 adversarial-review-design
 ```
 
-Two lines means only the diagnostics installed and the reviewers did not.
-No lines means opencode never loaded the plugin. Both cases are covered under
+Two lines means only the diagnostics installed and the reviewers did not. No
+lines means opencode never loaded the plugin. Both are covered under
 [Troubleshooting](#troubleshooting).
-
-## Use
-
-```
-/adversarial-review        review the current change
-/adversarial-review src/   review a path
-/adversarial-review-design docs/specs/my-spec.md
-```
 
 ## Choosing a reviewer model
 
-The reviewer should be a model you did NOT write the code with. Asking a model
-to review its own output asks it to see its own blind spot.
+The reviewer should be a model you did **not** write the code with. Asking a
+model to review its own output asks it to see its own blind spot.
 
 The default is `anthropic/claude-opus-5`, which needs an **Anthropic API key**.
 A Claude Pro or Max subscription does not cover third-party tools.
@@ -67,17 +125,15 @@ A Claude Pro or Max subscription does not cover third-party tools.
 reach works:
 
 ```jsonc
-["/path/to/plugin", { "model": "deepseek/deepseek-v4-pro" }]
-["/path/to/plugin", { "model": "openai/gpt-5.4" }]
+["/path/to/opencode-adversarial-review", { "model": "deepseek/deepseek-v4-pro" }]
+["/path/to/opencode-adversarial-review", { "model": "openai/gpt-5.4" }]
 ```
 
 Your provider must be listed in `enabled_providers`, and the model must be
 selectable under `provider.<name>.whitelist` if you use one.
 
-## Cost
-
-Reviews are priced per run by your provider. Switching the reviewer to a cheaper
-model is a one-line change.
+Reviews are priced per run by your provider. Switching to a cheaper reviewer is
+a one-line change.
 
 ## What it looks for
 
@@ -86,8 +142,15 @@ work), architecture and fit, and operational risk. It classifies the changed
 surface first, so security leads whenever the change touches untrusted input,
 auth, secrets, network or the filesystem.
 
-It is written to be useful on output from weaker models, which fails differently
-from strong-model output: plausible shape, unsound wiring.
+Before reporting anything it tries to kill the finding, against six ways a
+review is confidently wrong - unreachable hazards, right diagnosis with a wrong
+fix, consistency arguments where both options are worse, and so on. A finding it
+cannot write a concrete failure scenario for is not reported.
+
+`/adversarial-review-design` reviews a spec, plan or RFC instead of code. It
+can read files, but it is the one agent denied `review_context`, so it has no
+access to git at all - there is no repository history to reason about in a
+document review, and the narrower surface is the point.
 
 ## If a review looks cut short
 
@@ -101,7 +164,7 @@ presented as a clean one.
 **opencode hides plugin failures.** This is the single thing worth knowing
 before anything else. When a plugin fails to load, or its `config` hook throws,
 opencode exits 0, prints nothing to stderr, and simply leaves the plugin out.
-There is no way for a plugin to write to your terminal at that point - both
+A plugin cannot write to your terminal at that point either - both
 `console.error` and a direct stderr write are swallowed. So the symptom of every
 install problem is the same: nothing happens.
 
@@ -111,22 +174,22 @@ The reason is always recoverable, in one place:
 opencode debug config --print-logs --log-level ERROR 2>&1 | grep -i plugin
 ```
 
-That prints, for example:
+which prints, for example:
 
 ```
-level=ERROR message="failed to load plugin" path=file:///.../plugin/src/index.js
+level=ERROR message="failed to load plugin" path=file:///.../src/index.js
   error="opencode-adversarial-review: `model` must be provider/model, got \"opus\"."
 ```
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `/adversarial-review` says **MISCONFIGURED** in its description, and relays an error instead of reviewing | Your `model` option is not a valid `provider/model` reference | Correct it in the plugin options and restart opencode |
-| The commands do not exist at all, and the log says `already exists and is not ours` | You already have an agent or command of that name. The plugin refuses to overwrite it | Rename yours, or remove the plugin |
-| The commands do not exist and there is no log line | opencode never loaded the plugin - usually a wrong path | Check the path resolves; try `plugin/src/index.js` explicitly |
-| A review runs but on the wrong model | Should be impossible: the reviewer refuses at invocation if the serving model is not the configured one, and says both | If you see this, the check has a bug - please report it |
+| `/adversarial-review` says **MISCONFIGURED** and relays an error instead of reviewing | Your `model` option is not a valid `provider/model` reference | Correct it in the plugin options and restart opencode |
+| The commands do not exist, and the log says `already exists and is not ours` | You already have an agent or command of that name; the plugin refuses to overwrite it | Rename yours, or remove the plugin |
+| The commands do not exist and there is no log line | opencode never loaded the plugin, usually a wrong path | Check the path resolves; try `src/index.js` explicitly |
+| A review runs but on the wrong model | Should be impossible - the reviewer refuses at invocation if the serving model is not the configured one, naming both | If you see this, the check has a bug; please report it |
 
 A failed install is never a partial one. opencode discards the whole hook's
-mutations when it throws, so you either get both reviewers or neither.
+mutations when it throws, so you get both reviewers or neither.
 
 ## How it verifies itself
 
@@ -135,40 +198,26 @@ configured is worse than no reviewer, because the output looks identical. Three
 checks stand in the way:
 
 1. **Collision, before anything is written.** If an agent or command of either
-   name already exists and is not ours, it aborts without mutating.
+   name already exists and is not ours, it aborts without mutating. Your own
+   agent is never overwritten.
 2. **Fingerprint, after injection.** Model, mode, prompt hash, command template
    hash, every permission and every tool flag are compared against what we
    wrote - not merely checked for presence, which would pass on a same-named
    agent pointing somewhere else.
 3. **At invocation.** Every request the reviewer makes is checked against the
    configured model before it leaves. This one runs outside the `config` hook on
-   purpose, so a hook that stops firing cannot take the guard with it. It is
-   also the only one of the three that is loud: it aborts the review and the
-   error reaches you through the calling session.
+   purpose, so a hook that stops firing cannot take the guard with it, and it is
+   the only one of the three that is loud: it aborts the review and the error
+   reaches you through the calling session.
 
 ## Compatibility
 
 Written against **opencode 1.18.23**. Several behaviours it relies on are
-undocumented and were established by probe rather than from the published docs,
-which are wrong for this version on three counts. They are recorded with their
-exact commands and verbatim output in
-[`plugin/contracts/README.md`](plugin/contracts/README.md). Re-run those probes
-after any opencode upgrade.
-
-## Running it last
-
-It works standalone. If you prefer it as the final lens in a review gauntlet,
-say so in your own `AGENTS.md` or `CLAUDE.md`; the plugin does not assume an
-ordering.
-
-## The research behind it
-
-This repository also contains a differential evaluation harness. It set out to
-derive review instructions by measuring where one model fails and another does
-not, and stopped after two fixtures: see
-[the design spec](docs/superpowers/specs/2026-08-28-adversarial-review-plugin-design.md)
-for what it measured, what it did not, and why that is an economic stop rather
-than a null result.
+undocumented, and the published plugin docs are wrong for this version on three
+counts, so they were established by probe rather than by reading. Each is
+recorded with its exact command and verbatim output in
+[`contracts/README.md`](contracts/README.md), alongside the throwaway probes
+that produced them. Re-run those after any opencode upgrade.
 
 ## Licence
 
