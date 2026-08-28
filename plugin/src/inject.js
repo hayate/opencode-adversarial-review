@@ -2,6 +2,14 @@ import { CODE_REVIEW_PROMPT, DESIGN_REVIEW_PROMPT, COMPLETION_MARKER } from "./p
 
 export class CollisionError extends Error {}
 
+// Distinct from CollisionError: this is not a name clash, it is config.agent
+// or config.command being some non-object shape (an array, a string, a
+// number) that the rest of this module's optional-chaining and object-spread
+// code would otherwise mishandle silently rather than loudly. Kept as its
+// own type, not a CollisionError, so a caller can tell "a real name collided"
+// from "the config itself is malformed" without parsing the message.
+export class InvalidConfigError extends Error {}
+
 const CODE = "adversarial-review"
 const DESIGN = "adversarial-review-design"
 export const AGENTS = [CODE, DESIGN]
@@ -34,6 +42,33 @@ function callerInstruction(what) {
   ].join("\n")
 }
 
+// config.agent = [] is not nullish, so `config.agent ?? {}` would leave the
+// array in place; the collision check's optional chaining then finds nothing
+// on it, and injection proceeds to attach both agents as string-keyed
+// properties on the array - which JSON.stringify then serialises back to
+// "[]", silently dropping both read-only security agents with no error at
+// all. config.agent = "oops" would instead crash later with a raw, unhelpful
+// TypeError ("Cannot create property ... on string") that names neither this
+// plugin nor the actual cause. Reject both shapes here, before any mutation,
+// naming the key and what was actually found. null/undefined are left alone -
+// those already coerce correctly via `?? {}` below and are not the bug.
+function assertValidContainer(config, key) {
+  const value = config[key]
+  if (value === undefined || value === null) return
+  if (Array.isArray(value)) {
+    throw new InvalidConfigError(
+      `opencode-adversarial-review: config.${key} must be a plain object, got an array. ` +
+      `Refusing to inject into a config shaped like that.`,
+    )
+  }
+  if (typeof value !== "object") {
+    throw new InvalidConfigError(
+      `opencode-adversarial-review: config.${key} must be a plain object, got ${typeof value}. ` +
+      `Refusing to inject into a config shaped like that.`,
+    )
+  }
+}
+
 function assertNoCollision(config) {
   for (const name of AGENTS) {
     const existing = config.agent?.[name]
@@ -56,6 +91,8 @@ function assertNoCollision(config) {
 }
 
 export function injectInto(config, options) {
+  assertValidContainer(config, "agent")
+  assertValidContainer(config, "command")
   assertNoCollision(config)
 
   config.agent = config.agent ?? {}

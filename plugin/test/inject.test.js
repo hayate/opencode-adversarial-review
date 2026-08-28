@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { injectInto, CollisionError, AGENTS, COMMANDS } from "../src/inject.js"
+import { injectInto, CollisionError, InvalidConfigError, AGENTS, COMMANDS } from "../src/inject.js"
+import { CODE_REVIEW_PROMPT, DESIGN_REVIEW_PROMPT } from "../src/prompts.js"
 
 const opts = { model: "anthropic/claude-opus-5" }
 
@@ -83,4 +84,59 @@ test("injection is idempotent for our own agents", () => {
   const first = JSON.stringify(config)
   injectInto(config, opts)
   assert.equal(JSON.stringify(config), first)
+})
+
+test("the design agent also runs in subagent mode", () => {
+  const config = {}
+  injectInto(config, opts)
+  assert.equal(config.agent["adversarial-review-design"].mode, "subagent")
+})
+
+test("the design agent is also pinned to the configured model", () => {
+  const config = {}
+  injectInto(config, opts)
+  assert.equal(config.agent["adversarial-review-design"].model, "anthropic/claude-opus-5")
+})
+
+test("each agent carries its own prompt, not the other's", () => {
+  const config = {}
+  injectInto(config, opts)
+  assert.equal(config.agent["adversarial-review"].prompt, CODE_REVIEW_PROMPT)
+  assert.equal(config.agent["adversarial-review-design"].prompt, DESIGN_REVIEW_PROMPT)
+})
+
+test("each command binds to its own agent, not the other's", () => {
+  const config = {}
+  injectInto(config, opts)
+  assert.equal(config.command["adversarial-review"].agent, "adversarial-review")
+  assert.equal(config.command["adversarial-review-design"].agent, "adversarial-review-design")
+})
+
+test("an array config.agent throws instead of silently losing both security agents", () => {
+  const config = { agent: [] }
+  assert.throws(() => injectInto(config, opts), InvalidConfigError)
+  assert.deepEqual(config.agent, [], "the array must be left untouched, not silently populated")
+})
+
+test("a string config.agent throws our own error type, not a raw TypeError", () => {
+  const config = { agent: "oops" }
+  assert.throws(() => injectInto(config, opts), InvalidConfigError)
+})
+
+test("an array config.command throws instead of silently losing both commands", () => {
+  const config = { command: [] }
+  assert.throws(() => injectInto(config, opts), InvalidConfigError)
+  assert.deepEqual(config.command, [], "the array must be left untouched, not silently populated")
+})
+
+test("a string config.command throws our own error type, not a raw TypeError", () => {
+  const config = { command: "oops" }
+  assert.throws(() => injectInto(config, opts), InvalidConfigError)
+})
+
+test("a null config.agent and config.command are still coerced to empty objects, not rejected", () => {
+  const config = { agent: null, command: null }
+  injectInto(config, opts)
+  assert.deepEqual(Object.keys(config.agent).sort(), [...AGENTS].sort())
+  assert.deepEqual(Object.keys(config.command).sort(), [...COMMANDS].sort())
 })
