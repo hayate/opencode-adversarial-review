@@ -43,6 +43,20 @@ export function execOptions(cwd) {
 //                   node-level output buffer (see below); ok is true
 // `cause` is null on an ordinary successful read, including one truncated
 // only by our own MAX_OUTPUT cap.
+//
+// `truncated` means the caller is not seeing everything git would have
+// produced - not merely "we hit MAX_OUTPUT". It is true when: our own
+// MAX_OUTPUT cap sliced a successful read; Node's maxBuffer cut a read
+// short (cause "max-buffer" - always true, by construction); or git
+// produced some stdout before failing or being killed (cause "git-error"
+// with any stdout at all - a failed or killed run gives no guarantee that
+// what we captured is everything a clean run would have produced, so any
+// prefix we did capture is flagged as partial rather than presented as
+// complete). It is false only when stdout is genuinely everything there
+// is to see: an under-the-cap successful read, a refusal, a harness-error,
+// or a git-error that produced no output before failing. This must hold on
+// every branch below - a truncated read must never be reported as
+// complete, in either direction.
 export function runGit(request, cwd) {
   let args
   try {
@@ -97,11 +111,19 @@ export function runGit(request, cwd) {
         }
 
         // git ran and either exited non-zero or was killed by the timeout.
+        // Any stdout the process emitted before that is real and worth
+        // returning - "as much as we saw before this broke" is more useful
+        // to a reviewer than nothing. It is never presented as complete:
+        // a failing or killed run gives no guarantee the rest would ever
+        // have matched a clean success, so any output we did capture is
+        // flagged as truncated, and capped the same way a successful read
+        // is.
+        const truncated = stdout.length > 0
         resolve({
           ok: false,
-          stdout: "",
+          stdout: truncated ? stdout.slice(0, MAX_OUTPUT) + "\n[output truncated]" : stdout,
           stderr: stderr || error.message,
-          truncated: false,
+          truncated,
           cause: "git-error",
         })
       },
