@@ -285,6 +285,61 @@ failure this design exists to prevent.
 Declare a tested opencode version range. Test both plugin orderings and the
 same-name user agent and command cases.
 
+### 3.6 Interrupted and failed reviews
+
+**A review that did not finish must never render as a review that found
+nothing.** Those two outcomes are indistinguishable to a reader, and the user
+acts on the second by shipping.
+
+This is the failure mode the reviewer itself is built to hunt - the harvest's
+"a truncated listing looked like a short one" - and a reviewer that commits it
+is worse than no reviewer, because it manufactures confidence.
+
+The likely trigger is mundane: the reviewer model's credit runs out, or a rate
+limit lands, part-way through. The stream dies after the reviewer has read two
+of seven files and found nothing yet. Whatever text arrived reads as a clean
+review.
+
+**Three outcomes, not two.** This mirrors `classify_run`'s
+`completed` / `capped` / `invalid` in the harness, and exists for the same
+reason recorded there: an infrastructure failure counted as a model result is
+how a pipeline manufactures the finding you were hoping for.
+
+1. Completed, findings reported
+2. Completed, nothing material found
+3. **Did not complete** - and this must never present as 2
+
+**Mechanism.** Detection cannot depend on opencode surfacing a provider error,
+because we do not control that and have not measured it (see the probe below).
+So it is made independent of the transport:
+
+- Both reviewer prompts **must end their output with a line containing only
+  `REVIEW-COMPLETE`**. It is the last thing they emit, after the findings.
+- The command template instructs the calling session: **if that marker is
+  absent, the review did not finish.** Report it as incomplete, show whatever
+  partial findings arrived clearly labelled as partial, and name what was not
+  covered. Do not summarise it as clean.
+
+Belt and braces: the prompt emits the marker, the caller checks for it. Neither
+half requires opencode to report the underlying failure.
+
+**Error surfacing.** Where a provider error IS available, surface it verbatim.
+"Credit balance too low" is actionable; "review failed" is not.
+
+**Retry policy, split by cause.** Bounded retry on rate limits and transient
+network failures. **Never retry** on credit exhaustion or authentication
+failure: those are terminal, and retrying only reproduces the same error more
+slowly and more expensively.
+
+**Probe required before relying on any of this.** Force a provider failure
+mid-subagent and observe what opencode hands back to the calling session: a
+raised error, a truncated assistant message, or silence. If it swallows the
+failure into partial text, the completion marker is load-bearing rather than
+defence in depth. If it turns out an injected subagent cannot detect its own
+truncation at all, that is an argument for running the review through our own
+tool layer instead - a larger change, and one to make on the probe's evidence
+rather than on a guess.
+
 ---
 
 ## 4. The reviewer prompts
@@ -464,6 +519,7 @@ diffs, and it is the prerequisite for ever explaining an H-CALLSITE failure.
 | **The harvest is from strong-model output** in one language and framework. | Treated as a floor, not a map. Threat-sensitive priority (4.3) stops it from suppressing security review on other stacks. |
 | **Reviewer cost is per-review and uncapped.** | README states the cost characteristic; the model is one config line. |
 | **`command.template` placeholder syntax unverified.** Expected `$ARGUMENTS`. | Confirm during implementation. |
+| **A review interrupted by credit exhaustion or a rate limit could read as a clean review.** | Three-state outcome and the `REVIEW-COMPLETE` marker checked by the caller (3.6), independent of whether opencode surfaces the provider error. Probe required before relying on it. |
 | **The design reviewer's taxonomy comes from a single review of a single spec.** | Stated as such in 4.6. It is a starting point to be revised as more design reviews accumulate, not a validated instrument. |
 
 ---
@@ -715,6 +771,14 @@ Close with what you checked and cleared, briefly - so the next reader does not
 re-derive it.
 
 You are read-only. Recommend changes; do not write them.
+
+FINALLY, emit a line containing only:
+
+REVIEW-COMPLETE
+
+This must be the last line of your output, always, including when you found
+nothing. Its absence means the review was cut short, and the caller will treat
+it that way. Never emit it early.
 </output_contract>
 
 <calibration>
@@ -886,6 +950,14 @@ did not examine. Name what you checked and cleared, and say when you cleared it
 against evidence rather than by not looking.
 
 State what you read. You are read-only; recommend changes, do not make them.
+
+FINALLY, emit a line containing only:
+
+REVIEW-COMPLETE
+
+This must be the last line of your output, always, including when you found
+nothing. Its absence means the review was cut short, and the caller will treat
+it that way. Never emit it early.
 </output_contract>
 
 <calibration>
