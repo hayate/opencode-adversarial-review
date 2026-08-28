@@ -140,3 +140,24 @@ test("a null config.agent and config.command are still coerced to empty objects,
   assert.deepEqual(Object.keys(config.agent).sort(), [...AGENTS].sort())
   assert.deepEqual(Object.keys(config.command).sort(), [...COMMANDS].sort())
 })
+
+// The same silent-loss bug one level up. `config` itself being an array is not
+// reachable through opencode's own contract, which always passes a plain
+// object - but injectInto is an exported entry point, and the failure mode is
+// the worst available one: the two assignments attach string-keyed properties
+// to the array, JSON.stringify serialises it back to "[]", and both read-only
+// security agents vanish with no error anywhere.
+test("an array config throws instead of silently losing everything on serialisation", () => {
+  const config = []
+  assert.throws(() => injectInto(config, opts), InvalidConfigError)
+  assert.equal(JSON.stringify(config), "[]")
+  assert.equal(config.agent, undefined, "the array must be left untouched, not silently populated")
+})
+
+test("a string config throws our own error type, not a raw TypeError", () => {
+  assert.throws(() => injectInto("oops", opts), InvalidConfigError)
+})
+
+test("a null config throws our own error type, not a raw TypeError", () => {
+  assert.throws(() => injectInto(null, opts), InvalidConfigError)
+})
