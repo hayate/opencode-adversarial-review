@@ -1,5 +1,5 @@
 {
-  "name": "opencode-adversarial-review",
+  "name": "opencode-floor-review",
   "version": "0.1.0",
   "private": true,
   "//": "private:true is deliberate. It is the guard that makes `npm publish` impossible while this is being tested locally, and it is the ONLY line to remove when publishing. See the README section 'Installing it locally'.",
@@ -10,7 +10,7 @@
   "files": ["src"],
   "engines": { "node": ">=18.18" },
   "license": "MIT",
-  "keywords": ["opencode", "opencode-plugin", "code-review", "adversarial-review"],
+  "keywords": ["opencode", "opencode-plugin", "code-review", "floor-review"],
   "scripts": { "test": "node --test test/*.test.js" },
   "devDependencies": { "@opencode-ai/plugin": "1.18.21" }
 }

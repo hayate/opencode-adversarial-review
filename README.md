@@ -1,4 +1,4 @@
-# opencode-adversarial-review
+# opencode-floor-review
 
 Adversarial code and design review for [opencode](https://opencode.ai), run by a
 model you choose - independent of the model you are coding with.
@@ -8,9 +8,9 @@ or with whatever else you point it at. The reviewer is read-only: it cannot edit
 your files, run shell commands, or reach the network.
 
 ```
-/adversarial-review                          review the current change
-/adversarial-review src/auth                 review a path
-/adversarial-review-design docs/my-spec.md   review a spec, plan or RFC
+/floor-review                          review the current change
+/floor-review src/auth                 review a path
+/floor-review-design docs/my-spec.md   review a spec, plan or RFC
 ```
 
 > **Status: not published to npm.** Install it from a checkout, below.
@@ -66,6 +66,12 @@ Everything here either ships or explains what ships.
 | `src/index.js` | the entry point: registers the hooks and the tool |
 | `src/inject.js` | builds the two agent and two command definitions |
 | `src/prompts.js`, `src/prompts/*.md` | the two reviewer prompts |
+
+The code reviewer is tuned for raising the floor: it assumes the author is
+likely a weaker model, checks the original request requirement by
+requirement when it is provided, and marks anything that can only be
+settled by executing the code with a `RUN-CHECK:` line for a separate
+verification pass to collect and run.
 | `src/options.js` | validates the one option, `model` |
 | `src/verify.js` | checks what actually landed in the resolved config |
 | `src/tool.js` | the `review_context` tool the reviewer calls |
@@ -84,7 +90,7 @@ Clone this repository, then add it to the `plugin` array in your
 ```jsonc
 {
   "plugin": [
-    ["/absolute/path/to/opencode-adversarial-review", { "model": "anthropic/claude-opus-5" }]
+    ["/absolute/path/to/opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
   ]
 }
 ```
@@ -97,7 +103,7 @@ inside an existing one:
   "plugin": [
     "some-other-plugin",
     "another@git+https://github.com/someone/another.git",
-    ["/absolute/path/to/opencode-adversarial-review", { "model": "anthropic/claude-opus-5" }]
+    ["/absolute/path/to/opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
   ]
 }
 ```
@@ -116,16 +122,16 @@ a project's `opencode.json` to scope it there, or in
 Check it landed:
 
 ```bash
-opencode debug config | jq -r '.agent, .command | keys[] | select(startswith("adversarial-review"))'
+opencode debug config | jq -r '.agent, .command | keys[] | select(startswith("floor-review"))'
 ```
 
 Four lines means a healthy install - both agents, then both commands:
 
 ```
-adversarial-review
-adversarial-review-design
-adversarial-review
-adversarial-review-design
+floor-review
+floor-review-design
+floor-review
+floor-review-design
 ```
 
 Two lines means only the diagnostics installed and the reviewers did not. No
@@ -144,8 +150,8 @@ A Claude Pro or Max subscription does not cover third-party tools.
 reach works:
 
 ```jsonc
-["/path/to/opencode-adversarial-review", { "model": "deepseek/deepseek-v4-pro" }]
-["/path/to/opencode-adversarial-review", { "model": "openai/gpt-5.4" }]
+["/path/to/opencode-floor-review", { "model": "deepseek/deepseek-v4-pro" }]
+["/path/to/opencode-floor-review", { "model": "openai/gpt-5.4" }]
 ```
 
 Those are the entry, not the whole array. Keep your other entries alongside it.
@@ -168,7 +174,7 @@ review is confidently wrong - unreachable hazards, right diagnosis with a wrong
 fix, consistency arguments where both options are worse, and so on. A finding it
 cannot write a concrete failure scenario for is not reported.
 
-`/adversarial-review-design` reviews a spec, plan or RFC instead of code. It
+`/floor-review-design` reviews a spec, plan or RFC instead of code. It
 can read files, but it is the one agent denied `review_context`, so it has no
 access to git at all - there is no repository history to reason about in a
 document review, and the narrower surface is the point.
@@ -199,12 +205,12 @@ which prints, for example:
 
 ```
 level=ERROR message="failed to load plugin" path=file:///.../src/index.js
-  error="opencode-adversarial-review: `model` must be provider/model, got \"opus\"."
+  error="opencode-floor-review: `model` must be provider/model, got \"opus\"."
 ```
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `/adversarial-review` says **MISCONFIGURED** and relays an error instead of reviewing | Your `model` option is not a valid `provider/model` reference | Correct it in the plugin options and restart opencode |
+| `/floor-review` says **MISCONFIGURED** and relays an error instead of reviewing | Your `model` option is not a valid `provider/model` reference | Correct it in the plugin options and restart opencode |
 | The commands do not exist, and the log says `already exists and is not ours` | You already have an agent or command of that name; the plugin refuses to overwrite it | Rename yours, or remove the plugin |
 | The commands do not exist and there is no log line | opencode never loaded the plugin, usually a wrong path | Check the path resolves; try `src/index.js` explicitly |
 | opencode exits 1 with `Config file ... is not valid JSON(C)` | A syntax error, often a missing `]` closing the `[path, options]` tuple or a missing `,` after the `plugin` array | Unlike plugin failures this one is loud: it names the file and prints the input. See the two-shapes rule under [Install](#install) |

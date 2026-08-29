@@ -12,8 +12,8 @@ const hash = (text) => createHash("sha256").update(text).digest("hex").slice(0, 
 // parameterised test matrix runs every case over every name in AGENTS, so it
 // surfaces as a red suite before it can ship.
 const EXPECTED_PROMPT = {
-  "adversarial-review": () => hash(CODE_REVIEW_PROMPT),
-  "adversarial-review-design": () => hash(DESIGN_REVIEW_PROMPT),
+  "floor-review": () => hash(CODE_REVIEW_PROMPT),
+  "floor-review-design": () => hash(DESIGN_REVIEW_PROMPT),
 }
 
 // The command template is not a static constant like the prompts - it is
@@ -59,8 +59,8 @@ const REQUIRED_PERMISSION = { edit: "deny", bash: "deny", webfetch: "deny", exte
 const READABLE = { read: true, grep: true, glob: true, list: true }
 const DENIED = { write: false, edit: false, patch: false, bash: false, webfetch: false }
 const EXPECTED_TOOLS = {
-  "adversarial-review": { ...READABLE, ...DENIED, review_context: true },
-  "adversarial-review-design": { ...READABLE, ...DENIED, review_context: false },
+  "floor-review": { ...READABLE, ...DENIED, review_context: true },
+  "floor-review-design": { ...READABLE, ...DENIED, review_context: false },
 }
 
 // Returns problems rather than throwing, so a caller can report every fault at

@@ -13,7 +13,7 @@ function injected() {
 
 // Every field-level case below runs against BOTH reviewers, driven off
 // inject.js's own AGENTS and COMMANDS. An earlier version of this file
-// hardcoded "adversarial-review" in all eighteen field-level tests, and a
+// hardcoded "floor-review" in all eighteen field-level tests, and a
 // mutation that skipped every field check for any other name left all 113
 // tests green: every integrity check for the design reviewer could be deleted
 // without a single failure. Parameterising is the fix, so the matrix must not
@@ -24,7 +24,7 @@ test("the field-level matrix covers more than one agent and command", () => {
 })
 
 // The code agent's name is a PREFIX of the design agent's, so a bare substring
-// match on "adversarial-review" passes for either. Quote-delimit it, the way
+// match on "floor-review" passes for either. Quote-delimit it, the way
 // the problem messages themselves do, or these assertions cannot tell which
 // agent a check actually fired on.
 const names = (name) => new RegExp(`"${name}"`)
@@ -176,19 +176,19 @@ for (const name of AGENTS) {
 // rather than a blanket one that a uniform expectation would satisfy.
 test("the code reviewer LOSING review_context is reported", () => {
   const config = injected()
-  config.agent["adversarial-review"].tools.review_context = false
+  config.agent["floor-review"].tools.review_context = false
   const problems = fingerprint(config, opts)
   assert.equal(problems.length, 1, problems.join(" | "))
-  assert.match(problems[0], names("adversarial-review"))
+  assert.match(problems[0], names("floor-review"))
   assert.match(problems[0], /tools\.review_context/)
 })
 
 test("the design reviewer GAINING review_context is reported", () => {
   const config = injected()
-  config.agent["adversarial-review-design"].tools.review_context = true
+  config.agent["floor-review-design"].tools.review_context = true
   const problems = fingerprint(config, opts)
   assert.equal(problems.length, 1, problems.join(" | "))
-  assert.match(problems[0], names("adversarial-review-design"))
+  assert.match(problems[0], names("floor-review-design"))
   assert.match(problems[0], /tools\.review_context/)
 })
 
@@ -242,29 +242,29 @@ for (const name of COMMANDS) {
 // instructions, or the reverse.
 test("swapping the two command templates is reported on both", () => {
   const config = injected()
-  const code = config.command["adversarial-review"].template
-  config.command["adversarial-review"].template = config.command["adversarial-review-design"].template
-  config.command["adversarial-review-design"].template = code
+  const code = config.command["floor-review"].template
+  config.command["floor-review"].template = config.command["floor-review-design"].template
+  config.command["floor-review-design"].template = code
   const problems = fingerprint(config, opts)
   assert.equal(problems.length, 2, problems.join(" | "))
-  assert.match(problems.join(" "), names("adversarial-review"))
-  assert.match(problems.join(" "), names("adversarial-review-design"))
+  assert.match(problems.join(" "), names("floor-review"))
+  assert.match(problems.join(" "), names("floor-review-design"))
 })
 
 test("swapping the two agent prompts is reported on both", () => {
   const config = injected()
-  const code = config.agent["adversarial-review"].prompt
-  config.agent["adversarial-review"].prompt = config.agent["adversarial-review-design"].prompt
-  config.agent["adversarial-review-design"].prompt = code
+  const code = config.agent["floor-review"].prompt
+  config.agent["floor-review"].prompt = config.agent["floor-review-design"].prompt
+  config.agent["floor-review-design"].prompt = code
   const problems = fingerprint(config, opts)
   assert.equal(problems.length, 2, problems.join(" | "))
-  assert.match(problems.join(" "), names("adversarial-review"))
-  assert.match(problems.join(" "), names("adversarial-review-design"))
+  assert.match(problems.join(" "), names("floor-review"))
+  assert.match(problems.join(" "), names("floor-review-design"))
 })
 
 test("several problems are all reported, not just the first", () => {
   const config = injected()
-  delete config.agent["adversarial-review-design"]
-  config.agent["adversarial-review"].model = "wrong/model"
+  delete config.agent["floor-review-design"]
+  config.agent["floor-review"].model = "wrong/model"
   assert.equal(fingerprint(config, opts).length, 2)
 })

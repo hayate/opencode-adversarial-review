@@ -15,7 +15,7 @@ test("injects two agents and two commands", () => {
 test("the code reviewer is read-only and pinned to the configured model", () => {
   const config = {}
   injectInto(config, opts)
-  const agent = config.agent["adversarial-review"]
+  const agent = config.agent["floor-review"]
   assert.equal(agent.model, "anthropic/claude-opus-5")
   assert.equal(agent.mode, "subagent")
   assert.equal(agent.permission.edit, "deny")
@@ -31,7 +31,7 @@ test("the code reviewer is read-only and pinned to the configured model", () => 
 test("the design reviewer gets no git tool at all", () => {
   const config = {}
   injectInto(config, opts)
-  const agent = config.agent["adversarial-review-design"]
+  const agent = config.agent["floor-review-design"]
   assert.equal(agent.tools.review_context, false)
   assert.equal(agent.tools.bash, false)
   assert.equal(agent.permission.edit, "deny")
@@ -45,26 +45,26 @@ test("existing unrelated agents and commands are preserved", () => {
 })
 
 test("a colliding agent name aborts WITHOUT mutating", () => {
-  const config = { agent: { "adversarial-review": { prompt: "the user's own" } } }
+  const config = { agent: { "floor-review": { prompt: "the user's own" } } }
   assert.throws(() => injectInto(config, opts), CollisionError)
-  assert.deepEqual(config.agent["adversarial-review"], { prompt: "the user's own" },
+  assert.deepEqual(config.agent["floor-review"], { prompt: "the user's own" },
     "the user's agent must survive untouched")
   assert.equal(config.command, undefined, "nothing may be injected after a collision")
 })
 
 test("a colliding command name aborts WITHOUT mutating", () => {
-  const config = { command: { "adversarial-review": { template: "the user's own" } } }
+  const config = { command: { "floor-review": { template: "the user's own" } } }
   assert.throws(() => injectInto(config, opts), CollisionError)
-  assert.deepEqual(config.command["adversarial-review"], { template: "the user's own" })
+  assert.deepEqual(config.command["floor-review"], { template: "the user's own" })
   assert.equal(config.agent, undefined)
 })
 
 test("the collision error names what collided and how to resolve it", () => {
   try {
-    injectInto({ agent: { "adversarial-review": {} } }, opts)
+    injectInto({ agent: { "floor-review": {} } }, opts)
     assert.fail("should have thrown")
   } catch (error) {
-    assert.match(error.message, /adversarial-review/)
+    assert.match(error.message, /floor-review/)
     assert.match(error.message, /rename/i)
   }
 })
@@ -89,27 +89,27 @@ test("injection is idempotent for our own agents", () => {
 test("the design agent also runs in subagent mode", () => {
   const config = {}
   injectInto(config, opts)
-  assert.equal(config.agent["adversarial-review-design"].mode, "subagent")
+  assert.equal(config.agent["floor-review-design"].mode, "subagent")
 })
 
 test("the design agent is also pinned to the configured model", () => {
   const config = {}
   injectInto(config, opts)
-  assert.equal(config.agent["adversarial-review-design"].model, "anthropic/claude-opus-5")
+  assert.equal(config.agent["floor-review-design"].model, "anthropic/claude-opus-5")
 })
 
 test("each agent carries its own prompt, not the other's", () => {
   const config = {}
   injectInto(config, opts)
-  assert.equal(config.agent["adversarial-review"].prompt, CODE_REVIEW_PROMPT)
-  assert.equal(config.agent["adversarial-review-design"].prompt, DESIGN_REVIEW_PROMPT)
+  assert.equal(config.agent["floor-review"].prompt, CODE_REVIEW_PROMPT)
+  assert.equal(config.agent["floor-review-design"].prompt, DESIGN_REVIEW_PROMPT)
 })
 
 test("each command binds to its own agent, not the other's", () => {
   const config = {}
   injectInto(config, opts)
-  assert.equal(config.command["adversarial-review"].agent, "adversarial-review")
-  assert.equal(config.command["adversarial-review-design"].agent, "adversarial-review-design")
+  assert.equal(config.command["floor-review"].agent, "floor-review")
+  assert.equal(config.command["floor-review-design"].agent, "floor-review-design")
 })
 
 test("an array config.agent throws instead of silently losing both security agents", () => {

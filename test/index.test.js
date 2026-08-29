@@ -16,15 +16,15 @@ test("the config hook injects with the default model", async () => {
   const hooks = await AdversarialReview(input, undefined)
   const config = {}
   await hooks.config(config)
-  assert.equal(config.agent["adversarial-review"].model, MODEL)
+  assert.equal(config.agent["floor-review"].model, MODEL)
 })
 
 test("the config hook honours a configured model for both agents", async () => {
   const hooks = await AdversarialReview(input, { model: "deepseek/deepseek-v4-pro" })
   const config = {}
   await hooks.config(config)
-  assert.equal(config.agent["adversarial-review"].model, "deepseek/deepseek-v4-pro")
-  assert.equal(config.agent["adversarial-review-design"].model, "deepseek/deepseek-v4-pro")
+  assert.equal(config.agent["floor-review"].model, "deepseek/deepseek-v4-pro")
+  assert.equal(config.agent["floor-review-design"].model, "deepseek/deepseek-v4-pro")
 })
 
 // MEASURED, not assumed (contracts/ Step 7): opencode swallows a plugin
@@ -58,10 +58,10 @@ test("a bad model option installs a diagnostic under both command names", async 
 test("a bad model option never displaces a command the user already has", async () => {
   const hooks = await AdversarialReview(input, { model: "opus" })
   const mine = { description: "mine", template: "mine" }
-  const config = { command: { "adversarial-review": mine } }
+  const config = { command: { "floor-review": mine } }
   await hooks.config(config)
-  assert.equal(config.command["adversarial-review"], mine)
-  assert.match(config.command["adversarial-review-design"].description, /MISCONFIGURED/)
+  assert.equal(config.command["floor-review"], mine)
+  assert.match(config.command["floor-review-design"].description, /MISCONFIGURED/)
 })
 
 test("the diagnostic path tolerates the config shapes injectInto refuses", async () => {
@@ -89,7 +89,7 @@ test("a valid model installs the reviewer and no diagnostic", async () => {
 
 test("a collision surfaces as an error from the config hook", async () => {
   const hooks = await AdversarialReview(input, {})
-  const config = { agent: { "adversarial-review": { prompt: "mine" } } }
+  const config = { agent: { "floor-review": { prompt: "mine" } } }
   await assert.rejects(() => hooks.config(config), /Refusing to overwrite/)
 })
 
@@ -111,8 +111,8 @@ test("a config that silently discards our writes is refused, not reported health
   })
   await assert.rejects(() => hooks.config(config), (e) => {
     assert.match(e.message, /did not install correctly/)
-    assert.match(e.message, /"adversarial-review" is missing/)
-    assert.match(e.message, /"adversarial-review-design" is missing/)
+    assert.match(e.message, /"floor-review" is missing/)
+    assert.match(e.message, /"floor-review-design" is missing/)
     assert.match(e.message, /Refusing to continue/)
     return true
   })
@@ -192,7 +192,7 @@ for (const other of ["title", "build", "general", "summary", "compaction"]) {
 
 test("an agent whose name merely starts with ours is not policed", async () => {
   const hooks = await installed()
-  await hooks["chat.params"](paramsInput("adversarial-review-mine", { providerID: "deepseek", id: "x" }), {})
+  await hooks["chat.params"](paramsInput("floor-review-mine", { providerID: "deepseek", id: "x" }), {})
 })
 
 test("a missing agent name is not policed, since we cannot know it is ours", async () => {
@@ -203,11 +203,11 @@ test("a missing agent name is not policed, since we cannot know it is ours", asy
 test("a provider-qualified model with slashes in the id round-trips", async () => {
   const hooks = await installed({ model: "openrouter/anthropic/claude-3.5-sonnet" })
   await hooks["chat.params"](
-    paramsInput("adversarial-review", { providerID: "openrouter", id: "anthropic/claude-3.5-sonnet" }),
+    paramsInput("floor-review", { providerID: "openrouter", id: "anthropic/claude-3.5-sonnet" }),
     {},
   )
   await assert.rejects(
-    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: "openrouter", id: "anthropic/claude-3-opus" }), {}),
+    () => hooks["chat.params"](paramsInput("floor-review", { providerID: "openrouter", id: "anthropic/claude-3-opus" }), {}),
     /openrouter\/anthropic\/claude-3-opus/,
   )
 })
@@ -225,18 +225,18 @@ test("a provider-qualified model with slashes in the id round-trips", async () =
 test("after a collision refuses our install, we stop policing the name the user owns", async () => {
   const hooks = await AdversarialReview(input, {})
   const mine = { description: "my own agent", model: "deepseek/deepseek-v4-flash", prompt: "mine" }
-  const config = { agent: { "adversarial-review": mine } }
+  const config = { agent: { "floor-review": mine } }
   await assert.rejects(() => hooks.config(config), /Refusing to overwrite/)
-  assert.equal(config.agent["adversarial-review"], mine, "their agent must be untouched")
+  assert.equal(config.agent["floor-review"], mine, "their agent must be untouched")
   // Their agent, their model, their business.
-  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "deepseek-v4-flash" }), {})
-  await hooks["chat.params"](paramsInput("adversarial-review-design", { providerID: "deepseek", id: "deepseek-v4-flash" }), {})
+  await hooks["chat.params"](paramsInput("floor-review", { providerID: "deepseek", id: "deepseek-v4-flash" }), {})
+  await hooks["chat.params"](paramsInput("floor-review-design", { providerID: "deepseek", id: "deepseek-v4-flash" }), {})
 })
 
 test("a config hook that never ran leaves the guard without standing", async () => {
   const hooks = await AdversarialReview(input, {})
   // No agent of ours exists, so any agent wearing the name belongs to someone else.
-  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
+  await hooks["chat.params"](paramsInput("floor-review", { providerID: "deepseek", id: "x" }), {})
 })
 
 test("a fingerprint failure also withdraws the guard, since nothing of ours installed", async () => {
@@ -248,15 +248,15 @@ test("a fingerprint failure also withdraws the guard, since nothing of ours inst
     get: () => ({ ...stored }), set: (value) => { stored = value },
   })
   await assert.rejects(() => hooks.config(config), /did not install correctly/)
-  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
+  await hooks["chat.params"](paramsInput("floor-review", { providerID: "deepseek", id: "x" }), {})
 })
 
 test("a later successful install re-arms the guard", async () => {
   const hooks = await AdversarialReview(input, {})
-  await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
+  await assert.rejects(() => hooks.config({ agent: { "floor-review": { prompt: "mine" } } }), /Refusing/)
   await hooks.config({})
   await assert.rejects(
-    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {}),
+    () => hooks["chat.params"](paramsInput("floor-review", { providerID: "deepseek", id: "x" }), {}),
     /about to be served by/,
   )
 })
@@ -271,11 +271,11 @@ test("an unserialisable model does not replace our message with a raw TypeError"
   const circular = { providerID: "anthropic" }
   circular.self = circular
   await assert.rejects(
-    () => hooks["chat.params"](paramsInput("adversarial-review", circular), {}),
+    () => hooks["chat.params"](paramsInput("floor-review", circular), {}),
     /cannot tell which model/,
   )
   await assert.rejects(
-    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: 1n }), {}),
+    () => hooks["chat.params"](paramsInput("floor-review", { providerID: 1n }), {}),
     /cannot tell which model/,
   )
 })
@@ -291,7 +291,7 @@ test("the error names the shape rather than dumping the whole model record", asy
     capabilities: { temperature: true, reasoning: true, input: { text: true, audio: false } },
     cost: { input: 1, output: 2, cache: { read: 1, write: 2 } },
   }
-  await assert.rejects(() => hooks["chat.params"](paramsInput("adversarial-review", fat), {}), (e) => {
+  await assert.rejects(() => hooks["chat.params"](paramsInput("floor-review", fat), {}), (e) => {
     assert.match(e.message, /an object with keys/)
     assert.ok(!e.message.includes("example.invalid"), "must not paste the record into the message")
     assert.ok(e.message.length < 600, `message is ${e.message.length} chars, too long to read`)
@@ -303,7 +303,7 @@ test("an empty-string model field reports that it cannot tell, not a mismatch", 
   const hooks = await installed()
   for (const model of [{ providerID: "", id: "" }, { providerID: "anthropic", id: "" }, { providerID: "", id: "x" }]) {
     await assert.rejects(
-      () => hooks["chat.params"](paramsInput("adversarial-review", model), {}),
+      () => hooks["chat.params"](paramsInput("floor-review", model), {}),
       /cannot tell which model/,
       `expected the undeterminable message for ${JSON.stringify(model)}`,
     )
@@ -324,8 +324,8 @@ test("no usable directory installs a diagnostic instead of a silently-wrong revi
     const config = {}
     await hooks.config(config)
     assert.equal(config.agent, undefined, "no reviewer may be installed without a directory")
-    assert.match(config.command["adversarial-review"].description, /did not tell the plugin which directory/)
-    assert.match(config.command["adversarial-review"].template, /bug in the plugin/)
+    assert.match(config.command["floor-review"].description, /did not tell the plugin which directory/)
+    assert.match(config.command["floor-review"].template, /bug in the plugin/)
   }
 })
 
@@ -334,7 +334,7 @@ test("worktree is accepted when directory is absent", async () => {
   assert.ok(hooks.tool.review_context)
   const config = {}
   await hooks.config(config)
-  assert.ok(config.agent["adversarial-review"])
+  assert.ok(config.agent["floor-review"])
 })
 
 // ---------------------------------------------------------------------------
@@ -357,7 +357,7 @@ test("a fault that is not the user's config does not tell them to fix their conf
   const hooks = await AdversarialReview(input, { get model() { throw new Error("internal fault") } })
   const config = {}
   await hooks.config(config)
-  const command = config.command["adversarial-review"]
+  const command = config.command["floor-review"]
   assert.match(command.description, /failed to load/)
   assert.match(command.template, /bug in the plugin/)
   assert.doesNotMatch(command.template, /Correct it in the plugin's options/)
@@ -367,7 +367,7 @@ test("a genuine bad-model option still tells them to fix their config", async ()
   const hooks = await AdversarialReview(input, { model: "opus" })
   const config = {}
   await hooks.config(config)
-  assert.match(config.command["adversarial-review"].template, /Correct it in the plugin's options/)
+  assert.match(config.command["floor-review"].template, /Correct it in the plugin's options/)
 })
 
 // The diagnostic template becomes a PROMPT run by the user's session model,
@@ -395,7 +395,7 @@ test("the diagnostic prompt is byte-identical whatever the rejected value was", 
     const hooks = await AdversarialReview(input, { model })
     const config = {}
     await hooks.config(config)
-    return config.command["adversarial-review"].template
+    return config.command["floor-review"].template
   }
   // If it varies with the input at all, something from the input is in it.
   assert.equal(await render("opus"), await render("a b c / d"))
@@ -406,13 +406,13 @@ test("a successful install followed by a failed one WITHDRAWS the guard", async 
   const hooks = await AdversarialReview(input, {})
   await hooks.config({})
   await assert.rejects(
-    () => hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {}),
+    () => hooks["chat.params"](paramsInput("floor-review", { providerID: "deepseek", id: "x" }), {}),
     /about to be served by/,
   )
   // Now a reload where the user has since added their own agent by that name.
-  await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
+  await assert.rejects(() => hooks.config({ agent: { "floor-review": { prompt: "mine" } } }), /Refusing/)
   // The name is theirs now. Standing must be withdrawn, not left over from before.
-  await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
+  await hooks["chat.params"](paramsInput("floor-review", { providerID: "deepseek", id: "x" }), {})
 })
 
 // ---------------------------------------------------------------------------
@@ -440,11 +440,11 @@ test("a later plugin rebinding our command to another agent is refused at invoca
   const config = {}
   await hooks.config(config)
   // Exactly what a plugin loading after ours can do: same object, after our check.
-  config.command["adversarial-review"].agent = "some-other-reviewer"
+  config.command["floor-review"].agent = "some-other-reviewer"
   await assert.rejects(
-    () => hooks["command.execute.before"]({ command: "adversarial-review", sessionID: "s", arguments: "x" }, {}),
+    () => hooks["command.execute.before"]({ command: "floor-review", sessionID: "s", arguments: "x" }, {}),
     (e) => {
-      assert.match(e.message, /refusing to run \/adversarial-review/)
+      assert.match(e.message, /refusing to run \/floor-review/)
       assert.match(e.message, /altered after this plugin installed it/)
       assert.match(e.message, /agent binding/)
       return true
@@ -456,9 +456,9 @@ test("a later plugin re-enabling a forbidden tool is refused at invocation", asy
   const hooks = await AdversarialReview(input, {})
   const config = {}
   await hooks.config(config)
-  config.agent["adversarial-review"].tools.bash = true
+  config.agent["floor-review"].tools.bash = true
   await assert.rejects(
-    () => hooks["command.execute.before"]({ command: "adversarial-review", sessionID: "s", arguments: "x" }, {}),
+    () => hooks["command.execute.before"]({ command: "floor-review", sessionID: "s", arguments: "x" }, {}),
     /tools\.bash/,
   )
 })
@@ -467,7 +467,7 @@ test("somebody else's command is not our business", async () => {
   const hooks = await AdversarialReview(input, {})
   const config = {}
   await hooks.config(config)
-  config.command["adversarial-review"].agent = "hijacked"
+  config.command["floor-review"].agent = "hijacked"
   // Broken, but the user asked for a different command entirely.
   await hooks["command.execute.before"]({ command: "build", sessionID: "s", arguments: "x" }, {})
   await hooks["command.execute.before"]({ command: undefined, sessionID: "s", arguments: "x" }, {})
@@ -475,9 +475,9 @@ test("somebody else's command is not our business", async () => {
 
 test("without standing, the recheck stays out of it", async () => {
   const hooks = await AdversarialReview(input, {})
-  await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
+  await assert.rejects(() => hooks.config({ agent: { "floor-review": { prompt: "mine" } } }), /Refusing/)
   // The name is the user's now, and there is no config of ours to check.
-  await hooks["command.execute.before"]({ command: "adversarial-review", sessionID: "s", arguments: "x" }, {})
+  await hooks["command.execute.before"]({ command: "floor-review", sessionID: "s", arguments: "x" }, {})
 })
 
 // Observed on the first real end-to-end run: the calling model stripped the
