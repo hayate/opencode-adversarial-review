@@ -1,6 +1,6 @@
 {
   "name": "opencode-floor-review",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Floor-raising code and design review for opencode: a read-only reviewer model you configure independently of your session model",
   "type": "module",
   "main": "src/index.js",
