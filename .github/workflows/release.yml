@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - run: |
           TAG="$GITHUB_REF_NAME"
           VERSION="$(node -p "require('./package.json').version")"
@@ -17,7 +19,13 @@ jobs:
             exit 1
           fi
           echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
-            echo "::error::version $VERSION is not plain semver (prerelease tags publish with npm tag next)"
+            echo "::error::version $VERSION is not plain semver"
+            exit 1
+          }
+      - run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::tagged commit is not on main - refuse to publish an unmerged branch"
             exit 1
           }
 
@@ -34,7 +42,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      - run: node scripts/bump-version.mjs --check
+      - run: node scripts/check-version.mjs
       - run: npm test
       - run: npm publish --access public
       - run: gh release create "$GITHUB_REF_NAME" --generate-notes
