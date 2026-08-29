@@ -1,11 +1,15 @@
 # opencode-floor-review
 
-Adversarial code and design review for [opencode](https://opencode.ai), run by a
-model you choose - independent of the model you are coding with.
+[![npm version](https://img.shields.io/npm/v/opencode-floor-review)](https://www.npmjs.com/package/opencode-floor-review)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-You write code with DeepSeek, Qwen or a local model. This reviews it with Opus,
-or with whatever else you point it at. The reviewer is read-only: it cannot edit
-your files, run shell commands, or reach the network.
+Raise the floor on code you did not write with your session model.
+
+You write code with DeepSeek, Qwen, or a local model. This reviews it with a
+model you choose - Opus, Codex, anything - independent of the model you are
+coding with. It is tuned for weak authors: code that looks right but cannot
+work, tests that cannot fail, requirements silently dropped. The reviewer is
+read-only: it cannot edit your files, run shell commands, or reach the network.
 
 ```
 /floor-review                          review the current change
@@ -13,8 +17,69 @@ your files, run shell commands, or reach the network.
 /floor-review-design docs/my-spec.md   review a spec, plan or RFC
 ```
 
-> **Status: not published to npm.** Install it from a checkout, below.
-> `package.json` carries `private: true` so a stray `npm publish` cannot fire.
+## Install
+
+Add the package to the `plugin` array in `~/.config/opencode/opencode.jsonc`
+(global) or a project's `opencode.json`. The tuple form carries the one option:
+
+```jsonc
+{
+  "plugin": [
+    ["opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
+  ]
+}
+```
+
+opencode installs the npm package at startup. If you already have plugins,
+add this as another entry - do not put it inside an existing one:
+
+```jsonc
+{
+  "plugin": [
+    "some-other-plugin",
+    "another@git+https://github.com/someone/another.git",
+    ["opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
+  ]
+}
+```
+
+The `plugin` array holds **entries**, and an entry is one of exactly two
+shapes: a plain string, or a two-element `[spec, options]` tuple. The tuple is
+only how you attach options to one plugin. It is not a container: a third
+element does not add a second plugin, it is handed to the first one as an extra
+argument and the plugin you meant to add never loads. Order does not matter.
+
+### From a checkout
+
+```jsonc
+{
+  "plugin": [
+    ["/absolute/path/to/opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
+  ]
+}
+```
+
+The path may be the repository root (resolved through `main`) or
+`src/index.js` directly.
+
+### Check it landed
+
+```bash
+opencode debug config | jq -r '.agent, .command | keys[] | select(startswith("floor-review"))'
+```
+
+Four lines means a healthy install - both agents, then both commands:
+
+```
+floor-review
+floor-review-design
+floor-review
+floor-review-design
+```
+
+Two lines means only the diagnostics installed and the reviewers did not. No
+lines means opencode never loaded the plugin. Both are covered under
+[Troubleshooting](#troubleshooting).
 
 ## What actually runs on your machine
 
@@ -53,8 +118,10 @@ crash reporting, and no phone-home of any kind.
 one devDependency is `@opencode-ai/plugin`, for types. Everything else is Node
 built-ins: `child_process`, `fs`, `path`, `url`, `crypto`.
 
-**It is small enough to read.** 837 lines across 8 source files, and the
-published package is 13 files. You can audit the whole thing in an afternoon,
+**It is small enough to read.** 1,390 lines across 9 source files, and the
+published package is `src/` plus metadata - 13 files. You can audit the whole
+thing in an afternoon, and I would rather you did than take my word for any of
+the above. You can audit the whole thing in an afternoon,
 and I would rather you did than take my word for any of the above.
 
 ## What is in this repository
@@ -65,78 +132,16 @@ Everything here either ships or explains what ships.
 |---|---|
 | `src/index.js` | the entry point: registers the hooks and the tool |
 | `src/inject.js` | builds the two agent and two command definitions |
-| `src/prompts.js`, `src/prompts/*.md` | the two reviewer prompts |
-
-The code reviewer is tuned for raising the floor: it assumes the author is
-likely a weaker model, checks the original request requirement by
-requirement when it is provided, and marks anything that can only be
-settled by executing the code with a `RUN-CHECK:` line for a separate
-verification pass to collect and run.
+| `src/prompts.js`, `src/prompts/*.md` | the two reviewer prompts. The code reviewer is tuned for raising the floor: it assumes the author is likely a weaker model, checks the original request requirement by requirement when it is provided, and marks anything that can only be settled by executing the code with a `RUN-CHECK:` line for a separate verification pass to collect and run |
 | `src/options.js` | validates the one option, `model` |
 | `src/verify.js` | checks what actually landed in the resolved config |
 | `src/tool.js` | the `review_context` tool the reviewer calls |
 | `src/git-args.js` | turns a mode and values into a git argv - never flags |
 | `src/git-run.js` | runs git through `execFile` with a pruned environment |
-| `test/` | 174 tests. `npm test` |
+| `test/` | 201 tests. `npm test` |
 | `contracts/` | opencode behaviour this plugin depends on, pinned by probe, with the exact commands and verbatim output |
 
 Only `src/` is published; `test/` and `contracts/` stay in the repository.
-
-## Install
-
-Clone this repository, then add it to the `plugin` array in your
-`opencode.jsonc`:
-
-```jsonc
-{
-  "plugin": [
-    ["/absolute/path/to/opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
-  ]
-}
-```
-
-**If you already have plugins, add this as another entry** - do not put it
-inside an existing one:
-
-```jsonc
-{
-  "plugin": [
-    "some-other-plugin",
-    "another@git+https://github.com/someone/another.git",
-    ["/absolute/path/to/opencode-floor-review", { "model": "anthropic/claude-opus-5" }]
-  ]
-}
-```
-
-The `plugin` array holds **entries**, and an entry is one of exactly two
-shapes: a plain string, or a two-element `[path, options]` tuple. The tuple is
-only how you attach options to one plugin. It is not a container: a third
-element does not add a second plugin, it is handed to the first one as an extra
-argument and the plugin you meant to add never loads. Order does not matter.
-
-The path may be the repository root (resolved through `main`) or
-`src/index.js` directly. Both were verified against opencode 1.18.23. Put it in
-a project's `opencode.json` to scope it there, or in
-`~/.config/opencode/opencode.jsonc` for every project.
-
-Check it landed:
-
-```bash
-opencode debug config | jq -r '.agent, .command | keys[] | select(startswith("floor-review"))'
-```
-
-Four lines means a healthy install - both agents, then both commands:
-
-```
-floor-review
-floor-review-design
-floor-review
-floor-review-design
-```
-
-Two lines means only the diagnostics installed and the reviewers did not. No
-lines means opencode never loaded the plugin. Both are covered under
-[Troubleshooting](#troubleshooting).
 
 ## Choosing a reviewer model
 
@@ -246,6 +251,16 @@ counts, so they were established by probe rather than by reading. Each is
 recorded with its exact command and verbatim output in
 [`contracts/README.md`](contracts/README.md), alongside the throwaway probes
 that produced them. Re-run those after any opencode upgrade.
+
+## Contributing
+
+Issues and PRs are welcome at [hayate/opencode-floor-review](https://github.com/hayate/opencode-floor-review).
+The test suite is `npm test`; the plugin pins undocumented opencode behaviour in
+[`contracts/README.md`](contracts/README.md) - re-run the probes after any
+opencode upgrade before trusting new behaviour.
+
+Security reports are ordinary issues. The plugin is read-only by design and
+contains no network code; anything that weakens that is a bug.
 
 ## Licence
 
