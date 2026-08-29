@@ -168,6 +168,12 @@ export const AdversarialReview = async (input, rawOptions) => {
   // applying - when it had applied and deliberately declined.
   let installed = false
 
+  // The config object we mutated, retained so it can be re-checked at
+  // invocation. opencode runs plugin config hooks sequentially over ONE shared
+  // object, so a plugin loading after us mutates this same reference after our
+  // fingerprint has already returned.
+  let installedConfig = null
+
   return {
     tool: {
       review_context: makeReviewContextTool(directory),
@@ -177,6 +183,7 @@ export const AdversarialReview = async (input, rawOptions) => {
       // Withdrawn first, so any failure below leaves the guard without standing
       // rather than leaving it armed over a name that is no longer ours.
       installed = false
+      installedConfig = null
       injectInto(config, options)
 
       // Verify what actually landed. Be precise about what this does and does
@@ -196,7 +203,33 @@ export const AdversarialReview = async (input, rawOptions) => {
           "\nRefusing to continue rather than give you a reviewer that silently uses the wrong model.",
         )
       }
+      installedConfig = config
       installed = true
+    },
+
+    // Both review lenses reached this independently: the fingerprint inside the
+    // config hook cannot catch a plugin that loads AFTER us and mutates the
+    // shared config object once we have already checked it. The sharpest form
+    // is rebinding command["adversarial-review"].agent to some other agent -
+    // chat.params below then sees a name that is not ours, stands down exactly
+    // as it should, and a session-model review proceeds looking legitimate.
+    //
+    // Re-checking here closes it, because command.execute.before is VERIFIED to
+    // fire before the subagent is dispatched and a throw here aborts the
+    // command outright (contracts Step 10: the subagent was never dispatched
+    // and the run exited 1). A guard on a hook not known to abort would have
+    // been no guard at all, which is why this waited for that probe.
+    "command.execute.before": async (invocation) => {
+      if (!installed || !COMMANDS.includes(invocation?.command)) return
+      const problems = fingerprint(installedConfig, options)
+      if (problems.length > 0) {
+        throw new Error(
+          `opencode-adversarial-review: refusing to run /${invocation.command} - the reviewer was ` +
+          "altered after this plugin installed it:\n  " + problems.join("\n  ") +
+          "\nSomething else in your opencode configuration changed it. A review by the wrong " +
+          "model, or by the wrong agent, is worse than no review because it reads exactly the same.",
+        )
+      }
     },
 
     // Spec 3.4's third check, and the only one that runs outside the config

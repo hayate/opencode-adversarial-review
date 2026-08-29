@@ -41,7 +41,9 @@ function callerInstruction(what) {
     `If that line is absent the review DID NOT FINISH - most likely the reviewer model ran out of credit or hit a rate limit.`,
     `In that case say so plainly, show whatever findings arrived and label them PARTIAL, and name what was not covered.`,
     `Never summarise an unfinished review as clean.`,
-    `Finally, strip the ${COMPLETION_MARKER} line before showing the review.`,
+    `Finally, strip the ${COMPLETION_MARKER} line before showing the review, and do NOT`,
+    `mention the marker to the user at all - it is an internal signal, not part of the`,
+    `review. Show the review, or say it is incomplete. Never narrate the check itself.`,
   ].join("\n")
 }
 

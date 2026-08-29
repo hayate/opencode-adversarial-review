@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { AdversarialReview } from "../src/index.js"
-import { AGENTS } from "../src/inject.js"
+import { AGENTS, COMMANDS as COMMANDS_UNDER_TEST } from "../src/inject.js"
 
 const input = { directory: "/tmp/repo", project: {}, client: {}, worktree: "/tmp/repo" }
 const MODEL = "anthropic/claude-opus-5"
@@ -413,4 +413,83 @@ test("a successful install followed by a failed one WITHDRAWS the guard", async 
   await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
   // The name is theirs now. Standing must be withdrawn, not left over from before.
   await hooks["chat.params"](paramsInput("adversarial-review", { providerID: "deepseek", id: "x" }), {})
+})
+
+// ---------------------------------------------------------------------------
+// The invocation-time recheck. Both review lenses reached this gap
+// independently: a plugin loading AFTER us mutates the same shared config
+// object once our fingerprint has already run. Rebinding the command's agent is
+// the sharpest form, because chat.params then sees a name that is not ours and
+// correctly stands down, letting a session-model review look legitimate.
+// ---------------------------------------------------------------------------
+
+test("command.execute.before is registered, or the recheck does not exist", async () => {
+  const hooks = await AdversarialReview(input, {})
+  assert.equal(typeof hooks["command.execute.before"], "function")
+})
+
+test("a healthy install runs the command without complaint", async () => {
+  const hooks = await installed()
+  for (const name of COMMANDS_UNDER_TEST) {
+    await hooks["command.execute.before"]({ command: name, sessionID: "s", arguments: "x" }, {})
+  }
+})
+
+test("a later plugin rebinding our command to another agent is refused at invocation", async () => {
+  const hooks = await AdversarialReview(input, {})
+  const config = {}
+  await hooks.config(config)
+  // Exactly what a plugin loading after ours can do: same object, after our check.
+  config.command["adversarial-review"].agent = "some-other-reviewer"
+  await assert.rejects(
+    () => hooks["command.execute.before"]({ command: "adversarial-review", sessionID: "s", arguments: "x" }, {}),
+    (e) => {
+      assert.match(e.message, /refusing to run \/adversarial-review/)
+      assert.match(e.message, /altered after this plugin installed it/)
+      assert.match(e.message, /agent binding/)
+      return true
+    },
+  )
+})
+
+test("a later plugin re-enabling a forbidden tool is refused at invocation", async () => {
+  const hooks = await AdversarialReview(input, {})
+  const config = {}
+  await hooks.config(config)
+  config.agent["adversarial-review"].tools.bash = true
+  await assert.rejects(
+    () => hooks["command.execute.before"]({ command: "adversarial-review", sessionID: "s", arguments: "x" }, {}),
+    /tools\.bash/,
+  )
+})
+
+test("somebody else's command is not our business", async () => {
+  const hooks = await AdversarialReview(input, {})
+  const config = {}
+  await hooks.config(config)
+  config.command["adversarial-review"].agent = "hijacked"
+  // Broken, but the user asked for a different command entirely.
+  await hooks["command.execute.before"]({ command: "build", sessionID: "s", arguments: "x" }, {})
+  await hooks["command.execute.before"]({ command: undefined, sessionID: "s", arguments: "x" }, {})
+})
+
+test("without standing, the recheck stays out of it", async () => {
+  const hooks = await AdversarialReview(input, {})
+  await assert.rejects(() => hooks.config({ agent: { "adversarial-review": { prompt: "mine" } } }), /Refusing/)
+  // The name is the user's now, and there is no config of ours to check.
+  await hooks["command.execute.before"]({ command: "adversarial-review", sessionID: "s", arguments: "x" }, {})
+})
+
+// Observed on the first real end-to-end run: the calling model stripped the
+// marker line as instructed and then announced "(REVIEW-COMPLETE present)" in
+// prose, leaking an internal signal into the user-visible review.
+test("the caller is told not to mention the marker, not merely to strip the line", async () => {
+  const config = {}
+  await (await AdversarialReview(input, {})).config(config)
+  for (const name of COMMANDS_UNDER_TEST) {
+    const template = config.command[name].template
+    assert.match(template, /do NOT/)
+    assert.match(template, /mention the marker to the user at all/)
+    assert.match(template, /Never narrate the check itself/)
+  }
 })
