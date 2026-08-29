@@ -134,7 +134,7 @@ function diagnosticHooks(fault) {
   }
 }
 
-export const AdversarialReview = async (input, rawOptions) => {
+export const FloorReview = async (input, rawOptions) => {
   // Resolve options at LOAD time. A bad model reference discovered when the
   // user runs a review is a wasted round trip and a confusing error.
   let options
@@ -274,4 +274,4 @@ export const AdversarialReview = async (input, rawOptions) => {
   }
 }
 
-export default AdversarialReview
+export default FloorReview
