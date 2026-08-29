@@ -19,12 +19,12 @@ export function resolveOptions(raw) {
   const model = raw?.model ?? DEFAULT_MODEL
   if (typeof model !== "string" || model.length === 0) {
     throw new OptionsError(
-      `opencode-adversarial-review: \`model\` must be a string of the form provider/model, got ${JSON.stringify(model)}`,
+      `opencode-floor-review: \`model\` must be a string of the form provider/model, got ${JSON.stringify(model)}`,
     )
   }
   if (!isModelReference(model)) {
     throw new OptionsError(
-      `opencode-adversarial-review: \`model\` must be provider/model, got ${JSON.stringify(model)}. ` +
+      `opencode-floor-review: \`model\` must be provider/model, got ${JSON.stringify(model)}. ` +
       `Example: "anthropic/claude-opus-5"`,
     )
   }

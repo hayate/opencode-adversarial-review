@@ -10,8 +10,8 @@ export class CollisionError extends Error {}
 // from "the config itself is malformed" without parsing the message.
 export class InvalidConfigError extends Error {}
 
-const CODE = "adversarial-review"
-const DESIGN = "adversarial-review-design"
+const CODE = "floor-review"
+const DESIGN = "floor-review-design"
 export const AGENTS = [CODE, DESIGN]
 export const COMMANDS = [CODE, DESIGN]
 
@@ -21,7 +21,7 @@ const ARG_PLACEHOLDER = "$ARGUMENTS"
 
 // A marker on the injected objects, so a second pass can tell its own work from
 // a user's agent that happens to share the name.
-const OURS = "x-opencode-adversarial-review"
+const OURS = "x-opencode-floor-review"
 
 // external_directory is denied too: a code reviewer has no business reading
 // outside the repository it was pointed at. doom_loop is deliberately left
@@ -62,13 +62,13 @@ function assertValidContainer(config, key) {
   if (value === undefined || value === null) return
   if (Array.isArray(value)) {
     throw new InvalidConfigError(
-      `opencode-adversarial-review: config.${key} must be a plain object, got an array. ` +
+      `opencode-floor-review: config.${key} must be a plain object, got an array. ` +
       `Refusing to inject into a config shaped like that.`,
     )
   }
   if (typeof value !== "object") {
     throw new InvalidConfigError(
-      `opencode-adversarial-review: config.${key} must be a plain object, got ${typeof value}. ` +
+      `opencode-floor-review: config.${key} must be a plain object, got ${typeof value}. ` +
       `Refusing to inject into a config shaped like that.`,
     )
   }
@@ -88,7 +88,7 @@ function assertValidContainer(config, key) {
 function assertValidRoot(config) {
   if (config === null || config === undefined || typeof config !== "object" || Array.isArray(config)) {
     throw new InvalidConfigError(
-      `opencode-adversarial-review: config must be a plain object, got ${Array.isArray(config) ? "an array" : typeof config === "object" ? String(config) : typeof config}. ` +
+      `opencode-floor-review: config must be a plain object, got ${Array.isArray(config) ? "an array" : typeof config === "object" ? String(config) : typeof config}. ` +
       `Refusing to inject into a config shaped like that.`,
     )
   }
@@ -99,7 +99,7 @@ function assertNoCollision(config) {
     const existing = config.agent?.[name]
     if (existing && !existing[OURS]) {
       throw new CollisionError(
-        `opencode-adversarial-review: an agent named "${name}" already exists and is not ours. ` +
+        `opencode-floor-review: an agent named "${name}" already exists and is not ours. ` +
         `Refusing to overwrite it. Rename your agent, or remove this plugin.`,
       )
     }
@@ -108,7 +108,7 @@ function assertNoCollision(config) {
     const existing = config.command?.[name]
     if (existing && !existing[OURS]) {
       throw new CollisionError(
-        `opencode-adversarial-review: a command named "${name}" already exists and is not ours. ` +
+        `opencode-floor-review: a command named "${name}" already exists and is not ours. ` +
         `Refusing to overwrite it. Rename your command, or remove this plugin.`,
       )
     }

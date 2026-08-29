@@ -56,7 +56,7 @@ function describeShape(value) {
 // outcome - a plugin that silently does nothing. So on the one fault a user can
 // actually cause by hand, a bad `model` value, we leave behind something that
 // speaks: the two command names, bound to no agent, whose template asks the
-// user's own session model to relay the error. `/adversarial-review` then says
+// user's own session model to relay the error. `/floor-review` then says
 // what is wrong instead of "unknown command".
 //
 // This is deliberately NOT done for a collision or a fingerprint failure. A
@@ -70,7 +70,7 @@ const diagnosticTemplate = (message, remedy) => [
   "",
   message,
   "",
-  "The opencode-adversarial-review plugin did not install because of that.",
+  "The opencode-floor-review plugin did not install because of that.",
   remedy,
 ].join("\n")
 
@@ -198,7 +198,7 @@ export const AdversarialReview = async (input, rawOptions) => {
       const problems = fingerprint(config, options)
       if (problems.length > 0) {
         throw new Error(
-          "opencode-adversarial-review: the reviewer did not install correctly:\n  " +
+          "opencode-floor-review: the reviewer did not install correctly:\n  " +
           problems.join("\n  ") +
           "\nRefusing to continue rather than give you a reviewer that silently uses the wrong model.",
         )
@@ -210,7 +210,7 @@ export const AdversarialReview = async (input, rawOptions) => {
     // Both review lenses reached this independently: the fingerprint inside the
     // config hook cannot catch a plugin that loads AFTER us and mutates the
     // shared config object once we have already checked it. The sharpest form
-    // is rebinding command["adversarial-review"].agent to some other agent -
+    // is rebinding command["floor-review"].agent to some other agent -
     // chat.params below then sees a name that is not ours, stands down exactly
     // as it should, and a session-model review proceeds looking legitimate.
     //
@@ -224,7 +224,7 @@ export const AdversarialReview = async (input, rawOptions) => {
       const problems = fingerprint(installedConfig, options)
       if (problems.length > 0) {
         throw new Error(
-          `opencode-adversarial-review: refusing to run /${invocation.command} - the reviewer was ` +
+          `opencode-floor-review: refusing to run /${invocation.command} - the reviewer was ` +
           "altered after this plugin installed it:\n  " + problems.join("\n  ") +
           "\nSomething else in your opencode configuration changed it. A review by the wrong " +
           "model, or by the wrong agent, is worse than no review because it reads exactly the same.",
@@ -251,13 +251,13 @@ export const AdversarialReview = async (input, rawOptions) => {
       // chat.params fires for title, build, summary and every other agent in
       // the session. Policing any of those would break the user's whole
       // opencode install the moment this plugin loads. Exact membership, not
-      // a prefix test: "adversarial-review-mine" is somebody else's agent.
+      // a prefix test: "floor-review-mine" is somebody else's agent.
       if (!AGENTS.includes(params?.agent)) return
 
       const serving = servingModel(params.model)
       if (serving === null) {
         throw new Error(
-          `opencode-adversarial-review: cannot tell which model is about to serve "${params.agent}". ` +
+          `opencode-floor-review: cannot tell which model is about to serve "${params.agent}". ` +
           `opencode reported ${describeShape(params.model)}, which carries no non-empty id or modelID alongside providerID. ` +
           `Refusing to run a review whose model cannot be verified. If opencode was just upgraded, this shape has ` +
           `changed and the plugin needs updating - re-run the probes in contracts/.`,
@@ -265,7 +265,7 @@ export const AdversarialReview = async (input, rawOptions) => {
       }
       if (serving !== options.model) {
         throw new Error(
-          `opencode-adversarial-review: "${params.agent}" is about to be served by ${serving}, not the configured ` +
+          `opencode-floor-review: "${params.agent}" is about to be served by ${serving}, not the configured ` +
           `${options.model}. Refusing to run. A review by the wrong model is worse than no review, because it reads ` +
           `exactly the same. The config hook most likely did not apply - see the README's troubleshooting section.`,
         )

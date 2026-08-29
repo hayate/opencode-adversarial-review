@@ -26,8 +26,8 @@ before this file was written.
 | Can a repository's OWN `.git/config` make git run a program during a READ? | **Yes, via `core.fsmonitor`, and it survives a pruned environment** - the path comes from repository config, not an env var. Verified 2026-08-29 against the exact argv this plugin builds: it executed on `diff`, `status` AND `ls-files`. `-c core.fsmonitor=` blocks it, and is now prepended to every invocation. `diff.external` and `diff.<driver>.textconv` are the same class and were ALREADY blocked by the `--no-ext-diff --no-textconv` on the diff/log/show argv - confirmed by setting each config in isolation; only fsmonitor got through. Reachability: `git clone` does not transfer config, so the ordinary clone-and-review path was never exposed; an archive, a submodule, or a checkout someone else can write to was. |
 | Does `git status` rewrite `.git/index` on a read? | **Not reproduced.** A review claimed it does. Across repeated runs with touched mtimes the index stayed byte-identical. `GIT_OPTIONAL_LOCKS=0` is set anyway - one env entry, the documented switch for exactly this, and the read-only guarantee is one this plugin makes publicly. Recorded as unconfirmed rather than as a fixed bug. |
 | Does throwing from `command.execute.before` abort the command? | **Yes, before the subagent is dispatched.** Settled 2026-08-29 after an earlier attempt was blocked by an unrelated environment stall. With `PROBE_THROW_CMD=1` the log shows `COMMAND.EXECUTE.BEFORE` then `THROWING FROM command.execute.before`, the output contains ZERO references to the subagent, and the run exits 1. So a guard on this hook genuinely stops a command, which is what makes the invocation-time recheck in `src/index.js` possible. |
-| After a `config` hook throws, do the plugin's OTHER hooks stay registered? | **Yes, and this matters.** The throw is caught, logged and ignored, and every hook the plugin returned stays live and keeps firing for the rest of the session. So a plugin that declines to install still runs its other hooks. Verified live 2026-08-29: with a colliding `adversarial-review` agent, `injectInto` threw `CollisionError` and `chat.params` then fired for the user's own agent on the very next request. |
-| Are markdown-file-defined AGENTS visible to the `config` hook? | **Yes** - unlike markdown-file-defined *commands*, which are not (see the row above on `cfg.command`). A `.opencode/agent/adversarial-review.md` is present in `cfg.agent` when the hook runs, so a name collision against it is detected normally. Verified 2026-08-29: the collision fired, the plugin backed off, and the markdown agent survived with its own description and prompt intact. The asymmetry between agents and commands here is undocumented and worth re-checking on upgrade. |
+| After a `config` hook throws, do the plugin's OTHER hooks stay registered? | **Yes, and this matters.** The throw is caught, logged and ignored, and every hook the plugin returned stays live and keeps firing for the rest of the session. So a plugin that declines to install still runs its other hooks. Verified live 2026-08-29: with a colliding `floor-review` agent, `injectInto` threw `CollisionError` and `chat.params` then fired for the user's own agent on the very next request. |
+| Are markdown-file-defined AGENTS visible to the `config` hook? | **Yes** - unlike markdown-file-defined *commands*, which are not (see the row above on `cfg.command`). A `.opencode/agent/floor-review.md` is present in `cfg.agent` when the hook runs, so a name collision against it is detected normally. Verified 2026-08-29: the collision fired, the plugin backed off, and the markdown agent survived with its own description and prompt intact. The asymmetry between agents and commands here is undocumented and worth re-checking on upgrade. |
 | What shape is `model` on `chat.params`? | The FULL provider model record, not a two-field object: `id`, `providerID`, `name`, `api {id,url,npm}`, `capabilities`, `cost`, `limit`. Anything that serialises it wholesale into a message will paste a wall of JSON. |
 | What does a user see when a plugin FAILS TO LOAD? | **Nothing.** `opencode debug config` exits 0 with empty stderr and the plugin's agents and commands simply absent. The reason is reachable only via `opencode debug config --print-logs --log-level ERROR`, which prints `level=ERROR message="failed to load plugin" path=... error="<the thrown message>"`. Captured 2026-08-28 with a deliberately invalid `model` option. |
 | What does a user see when the `config` hook THROWS? | **Nothing, and the whole hook is rolled back.** Same exit 0 / empty stderr. Verified twice: a CollisionError (thrown before any mutation) and a fingerprint failure (thrown *after* injectInto had already mutated the config). In the second case NEITHER agent nor command survived - opencode discards the entire hook's mutations on a throw. That is the safe direction: a failed install is never a half-install. |
@@ -246,13 +246,13 @@ cd "$P" && ~/.opencode/bin/opencode debug config --print-logs --log-level ERROR 
 | Fault | plain exit | plain stderr | agents installed | reason findable |
 |---|---|---|---|---|
 | `{"model":"opus"}` - options rejected at load | 0 | 0 bytes | none | only in `logs.txt` |
-| user already has an agent named `adversarial-review` | 0 | 0 bytes | none (user's own agent untouched) | only in `logs.txt` |
+| user already has an agent named `floor-review` | 0 | 0 bytes | none (user's own agent untouched) | only in `logs.txt` |
 | `verify.js` made to disagree with `inject.js` - throw AFTER mutation | 0 | 0 bytes | **none** - whole hook rolled back | only in `logs.txt` |
 
 The logged line for the first, verbatim:
 
 ```
-level=ERROR message="failed to load plugin" path=file:///.../plugin/src/index.js error="opencode-adversarial-review: `model` must be provider/model, got \"opus\". Example: \"anthropic/claude-opus-5\""
+level=ERROR message="failed to load plugin" path=file:///.../plugin/src/index.js error="opencode-floor-review: `model` must be provider/model, got \"opus\". Example: \"anthropic/claude-opus-5\""
 ```
 
 A `console.error` and a `process.stderr.write` placed immediately before the
@@ -267,7 +267,7 @@ names as agent-less diagnostics whose `description` and `template` carry the
 error. Confirmed present in the resolved config afterwards:
 
 ```
-adversarial-review -> description "MISCONFIGURED - opencode-adversarial-review: `model` must be provider/model, got \"opus\"..."
+floor-review -> description "MISCONFIGURED - opencode-floor-review: `model` must be provider/model, got \"opus\"..."
                       subtask False, agent None, no reviewer agent installed
 ```
 
@@ -282,13 +282,13 @@ suite long before a user sees it.
 Captured 2026-08-29, free: the provider `baseURL` points at a dead port, so no
 tokens are billed, and `chat.params` fires before the HTTP attempt either way.
 
-A scratch project defines its OWN primary agent named `adversarial-review`, and
+A scratch project defines its OWN primary agent named `floor-review`, and
 loads this plugin alongside it. The plugin's `config` hook throws
 `CollisionError`, correctly refusing to overwrite. The question is what happens
 next. Two builds of the plugin, same config, same minute:
 
 ```
-cd "$P" && F1_LOG=$P/f1.log ~/.opencode/bin/opencode run --agent adversarial-review "hi"
+cd "$P" && F1_LOG=$P/f1.log ~/.opencode/bin/opencode run --agent floor-review "hi"
 ```
 
 Before the fix:
@@ -297,11 +297,11 @@ Before the fix:
 CONFIG HOOK ENTERED
 INJECT THREW: CollisionError
 CHAT.PARAMS agent="title" inAGENTS=false
-CHAT.PARAMS agent="adversarial-review" inAGENTS=true
+CHAT.PARAMS agent="floor-review" inAGENTS=true
 ```
 
 exit 1, and the user's own agent died with
-`opencode-adversarial-review: "adversarial-review" is about to be served by
+`opencode-floor-review: "floor-review" is about to be served by
 deepseek/deepseek-v4-flash, not the configured anthropic/claude-opus-5`.
 
 After the fix:
@@ -310,7 +310,7 @@ After the fix:
 CONFIG HOOK ENTERED
 INJECT THREW: CollisionError
 CHAT.PARAMS agent="title" installed=false -> STANDING DOWN
-CHAT.PARAMS agent="adversarial-review" installed=false -> STANDING DOWN   (x6)
+CHAT.PARAMS agent="floor-review" installed=false -> STANDING DOWN   (x6)
 ```
 
 zero occurrences of our error, and their agent proceeds to its own provider.
@@ -325,11 +325,11 @@ landed, not merely that the name matches.
 Captured 2026-08-29, free, no model call:
 
 ```
-mkdir -p "$P/.opencode/agent"   # with adversarial-review.md defining the user's own agent
+mkdir -p "$P/.opencode/agent"   # with floor-review.md defining the user's own agent
 cd "$P" && ~/.opencode/bin/opencode debug config | jq ...
 ```
 
-Observed: the resolved `adversarial-review` kept the markdown file's own
+Observed: the resolved `floor-review` kept the markdown file's own
 description and prompt, and this plugin's second agent was absent - meaning the
 collision check saw the markdown agent and backed off. So markdown AGENTS are
 visible to the hook even though markdown COMMANDS are not. A user's
@@ -362,7 +362,7 @@ aborts the subagent AFTER it has started and the caller sees a task error.
 
 **Why this mattered.** Two independent review lenses found the same gap: a
 plugin loading after this one mutates the same shared config object once our
-fingerprint has already run, and rebinding `command["adversarial-review"].agent`
+fingerprint has already run, and rebinding `command["floor-review"].agent`
 routes the command at another agent while `chat.params` correctly stands down.
 The fix needs a hook that can refuse an invocation. Until this was measured, a
 guard here would have been a guard that might not fire - the exact defect two
@@ -376,12 +376,12 @@ two commits: `format_notification` gains a required `tz` parameter and one of
 its two call sites is updated. The defect is therefore ABSENT from the diff.
 
 ```
-cd "$P/repo" && ~/.opencode/bin/opencode run --command adversarial-review \
+cd "$P/repo" && ~/.opencode/bin/opencode run --command floor-review \
   "the most recent commit on this branch" --format json
 ```
 
-Observed: `task` dispatched with `subagent_type: "adversarial-review"` and
-`command: "adversarial-review"`; `review_context` called with `mode=status`,
+Observed: `task` dispatched with `subagent_type: "floor-review"` and
+`command: "floor-review"`; `review_context` called with `mode=status`,
 `mode=files` and `mode=log limit=5`; the three source files read directly; one
 `REVIEW-COMPLETE` in the raw subagent output; and a DO-NOT-SHIP verdict naming
 `app/digest.py` with the concrete `TypeError` it would raise. It also warned

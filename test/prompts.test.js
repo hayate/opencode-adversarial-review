@@ -93,10 +93,12 @@ test("the calibration rule against manufacturing a finding per category survives
 })
 
 test("the code prompt legitimizes 'this needs a probe' as a real finding", () => {
-  // Without this line, a model under pressure to look thorough will assert a
+  // Without this, a model under pressure to look thorough will assert a
   // confident wrong answer instead of naming what it could not verify - the
   // exact failure mode <verification_before_reporting> exists to prevent.
-  assert.match(CODE_REVIEW_PROMPT, /"This needs a probe"/)
+  // The probe finding is now the machine-consumable RUN-CHECK convention.
+  assert.match(CODE_REVIEW_PROMPT, /This needs a probe/)
+  assert.match(CODE_REVIEW_PROMPT, /A confident wrong answer is\s+not a finding/)
 })
 
 test("isComplete requires the marker on its own final line", () => {
@@ -140,4 +142,15 @@ test("a bare marker with no preamble at all is NOT detected - known limitation",
   // general hole, only moved it.
   assert.equal(isComplete(COMPLETION_MARKER), true,
     "known limitation: a bare marker with no preceding content reads as complete")
+})
+
+test("the code prompt checks the ask itself, requirement by requirement, when it is available", () => {
+  assert.match(CODE_REVIEW_PROMPT, /requirement by requirement/)
+  assert.match(CODE_REVIEW_PROMPT, /THE ASK ITSELF/)
+  assert.match(CODE_REVIEW_PROMPT, /do\s+not invent one/, "prompt must skip the ask check rather than fabricate a request")
+})
+
+test("the code prompt emits machine-consumable RUN-CHECK lines for findings that need execution", () => {
+  assert.match(CODE_REVIEW_PROMPT, /RUN-CHECK:/)
+  assert.match(CODE_REVIEW_PROMPT, /execution pass/, "the marker's consumer (the dynamic verification pass) is named")
 })
